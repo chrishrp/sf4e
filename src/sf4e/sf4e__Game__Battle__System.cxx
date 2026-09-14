@@ -5,6 +5,8 @@
 #include <utility>
 #include <vector>
 
+#include <float.h>
+
 #include <windows.h>
 #include <shlobj.h>
 #include <detours/detours.h>
@@ -82,6 +84,34 @@ fSystem::SaveState fSystem::saveStates[NUM_SAVE_STATES];
 fSystem::SyncTest fSystem::syncTest;
 
 rKey::MementoID GGPO_MEMENTO_ID = { 1, 1 };
+
+// Floating-point mode consistency for rollback determinism.
+//
+// Direct3D 9 resets the FPU control word (precision and rounding) while it
+// renders, unless the device was created with D3DCREATE_FPU_PRESERVE, which
+// this game does not use. So the control word in force when a frame is first
+// simulated can differ from the one in force when GGPO rolls back and
+// re-simulates that same frame -- and can differ between two machines whose
+// frames interleave with rendering differently. Either way the float math
+// (positions, physics) then produces slightly different results and the
+// games drift apart. Capture the control word the game's own simulation uses
+// on the first battle frame, then re-assert exactly that before every
+// simulated frame and every rollback re-simulation, so all of them agree.
+// Using the game's own captured word means we never impose a mode it did not
+// choose; if the word never changes this is a no-op.
+static unsigned int g_fpControlWord = 0;
+static bool g_fpControlCaptured = false;
+
+static void EnforceSimFpControl() {
+    unsigned int current = 0;
+    if (!g_fpControlCaptured) {
+        _controlfp_s(&current, 0, 0);   // read
+        g_fpControlWord = current;
+        g_fpControlCaptured = true;
+        return;
+    }
+    _controlfp_s(&current, g_fpControlWord, _MCW_PC | _MCW_RC | _MCW_DN);
+}
 
 bool fSystem::extendedLoadRequest = false;
 bool fSystem::extendedSaveRequest = false;
@@ -300,6 +330,10 @@ void fSystem::BattleUpdate() {
     if (!bUpdateAllowed) {
         return;
     }
+
+    // Pin the FP mode before this frame is simulated, so a later rollback of
+    // this frame re-simulates under the identical mode. See EnforceSimFpControl.
+    EnforceSimFpControl();
 
     if (ggpo && nFramesToSkip > 0) {
         // Honour a time-sync request: hold the simulation this frame while
@@ -671,6 +705,9 @@ void fSystem::RecordAllToInternalMementos(rSystem* system, GameMementoKey::Memen
 
 
 void fSystem::StartGGPO(GGPOPlayer* inPlayers, int numPlayers, int port, int frameDelay, DWORD rngSeed) {
+    // Re-capture the simulation FP mode fresh for this match.
+    g_fpControlCaptured = false;
+
     GGPOSessionCallbacks cb = { 0 };
     cb.begin_game = ggpo_begin_game_callback;
     cb.advance_frame = ggpo_advance_frame_callback;
@@ -786,6 +823,10 @@ bool fSystem::ggpo_begin_game_callback(const char*)
 
 bool fSystem::ggpo_advance_frame_callback(int)
 {
+    // This is a rollback re-simulation. It must run under the same FP mode as
+    // the original simulation of these frames did.
+    EnforceSimFpControl();
+
     fPadSystem::Inputs inputs[2] = { {0, 0}, {0, 0} };
     int disconnect_flags = 0;
 
