@@ -1091,6 +1091,17 @@ void CopyIntoPlace(fSystem::SaveState* src) {
 
     // Force the system to reload from the replaced mementos.
     fSystem::RestoreAllFromInternalMementos(system, &GGPO_MEMENTO_ID);
+
+    // NOTE: do NOT try to re-stamp a Chara::Actor's saved memento image over the
+    // live object by raw byte offset. The memento is the game's STRUCTURED
+    // serialization, not a flat copy of the actor: geometry logging showed two
+    // actors whose live bases are only 0x7080 (28KB) apart while each memento is
+    // ~330KB, so buffer offset +N does NOT map to actorBase+N - the trailing
+    // float region lives in separately-allocated child objects. Writing by
+    // offset walks off the actor into unmapped memory (two hardware-fault
+    // crashes, 2026-09-14). Making the actor restore lossless needs the real
+    // sub-object addresses (disassembly of the game's record/restore), not a
+    // byte overlay. See sf4e-rollback-findings.
 }
 
 void Clear(fSystem::SaveState* victim) {
@@ -1706,6 +1717,32 @@ void fSystem::RunIdempotenceCheck() {
     }
     SaveState* baseline = &saveStates[baselineSlot];
     SaveState::Save(baseline);
+
+    // Memento geometry for the actor keys. Each key's buffer holds numMementos
+    // snapshots (a ring), so GetMementoDataSize spans ALL of them - not one
+    // object image. Log the true per-snapshot size and each snapshot's offset
+    // so a restore can target one snapshot and stay in the object's bounds.
+    for (auto iter = baseline->keys.begin(); iter != baseline->keys.end(); iter++) {
+        rKey& k = iter->second;
+        if (k.mementoableObject == nullptr) {
+            continue;
+        }
+        if (sf4e::Rtti::GetClassName(k.mementoableObject).find("Chara::Actor")
+            == std::string::npos) {
+            continue;
+        }
+        size_t dataSize = fKey::GetMementoDataSize(&k);
+        spdlog::info(
+            "Actor geometry: obj={} numMementos={} sizeAllocated={} nextIdx={} "
+            "dataSize={} perMemento~={}",
+            k.mementoableObject, k.numMementos, k.sizeAllocated, k.nextMementoIndex,
+            dataSize, k.numMementos ? dataSize / k.numMementos : 0);
+        for (int m = 0; m < k.numMementos && m < 8; m++) {
+            ptrdiff_t off = (const uint8_t*)k.metadata[m].memento - (const uint8_t*)k.mementos;
+            spdlog::info("   memento[{}] at +{} (id {:08x}:{:08x})",
+                m, off, k.metadata[m].id.hi, k.metadata[m].id.lo);
+        }
+    }
 
     struct Variant {
         const char* label;

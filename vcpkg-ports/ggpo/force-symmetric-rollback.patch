@@ -1,0 +1,43 @@
+--- a/src/lib/ggpo/sync.cpp	2026-09-14 20:19:15.644158300 +0200
++++ b/src/lib/ggpo/sync.cpp	2026-09-14 20:19:50.908800700 +0200
+@@ -130,6 +130,40 @@
+    int seek_to;
+    if (!CheckSimulationConsistency(&seek_to)) {
+       AdjustSimulation(seek_to);
++      return;
++   }
++
++   // sf4e: force SYMMETRIC rollback. The host game's actor save/restore is
++   // lossy (non-idempotent), so a peer that rolls back drifts from a peer that
++   // does not. Asymmetric latency (e.g. CGNAT) makes only one peer
++   // mispredict-and-roll-back, so only that peer picks up the restore error and
++   // the two sims fork. By rolling every peer back to the last AGREED frame on
++   // EVERY frame, the identical lossy restore runs on both, so they carry the
++   // same error and stay in sync. Only runs when prediction was already correct
++   // (the branch above handled a real misprediction). Bounded to the saved ring
++   // so LoadFrame never faults.
++   static bool s_force_symmetric_rollback = true;
++   if (s_force_symmetric_rollback && _framecount > 0) {
++      int target = _last_confirmed_frame;
++      int oldest = _framecount - MAX_PREDICTION_FRAMES;
++      if (target < oldest) {
++         target = oldest;
++      }
++      if (target >= _framecount) {
++         target = _framecount - 1;
++      }
++      bool saved = false;
++      if (target >= 0 && target < _framecount) {
++         for (int i = 0; i < ARRAY_SIZE(_savedstate.frames); i++) {
++            if (_savedstate.frames[i].frame == target) {
++               saved = true;
++               break;
++            }
++         }
++      }
++      if (saved) {
++         AdjustSimulation(target);
++      }
+    }
+ }
+ 
