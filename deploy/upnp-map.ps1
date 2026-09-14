@@ -8,7 +8,7 @@
 # found", forward the ports by hand in the router's app or web page instead.
 
 $ErrorActionPreference = 'Continue'
-$ports = @(23400..23420) + @(24001..24020)
+$ports = @(23400..23420) + @(24001..24020) + @(25001..25080)
 
 # This machine's address on the network the router is on.
 $route = Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Sort-Object RouteMetric | Select-Object -First 1
@@ -33,7 +33,7 @@ foreach ($target in @($gateway, '239.255.255.250')) {
 }
 $udp.Close()
 if (-not $location) {
-    Write-Host "No UPnP router found. Forward UDP 23400-23420 and 24001-24020 to $myIp by hand." -ForegroundColor Yellow
+    Write-Host "No UPnP router found. Forward UDP 23400-23420, 24001-24020 and 25001-25080 to $myIp by hand." -ForegroundColor Yellow
     exit 1
 }
 
