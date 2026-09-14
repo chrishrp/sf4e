@@ -704,9 +704,32 @@ void fSystem::RecordAllToInternalMementos(rSystem* system, GameMementoKey::Memen
 }
 
 
+// Ends the match cleanly instead of freezing on a modal box. A GGPO start
+// failure used to pop a message box, which blocks the game loop; the peer then
+// sees it go silent and desyncs too. Leaving returns both sides to the lobby.
+static void AbortMatchStart(const char* why) {
+    spdlog::error("Match start aborted: {}", why);
+    rSystem* sys = rSystem::staticMethods.GetSingleton();
+    if (sys) {
+        *rSystem::GetReadyState(sys) = rSystem::RS_ISLEAVING;
+    }
+}
+
 void fSystem::StartGGPO(GGPOPlayer* inPlayers, int numPlayers, int port, int frameDelay, DWORD rngSeed) {
     // Re-capture the simulation FP mode fresh for this match.
     g_fpControlCaptured = false;
+
+    // A match needs exactly two players in slots 1 and 2. On a poor connection
+    // the lobby data can be momentarily incomplete when the match fires, and a
+    // half-built player list makes ggpo_add_player fail ("could not add
+    // player"). Refuse to start rather than freeze on that box.
+    if (numPlayers < 2
+        || inPlayers[0].player_num != 1 || inPlayers[1].player_num != 2
+        || (inPlayers[0].type != GGPO_PLAYERTYPE_LOCAL && inPlayers[0].type != GGPO_PLAYERTYPE_REMOTE)
+        || (inPlayers[1].type != GGPO_PLAYERTYPE_LOCAL && inPlayers[1].type != GGPO_PLAYERTYPE_REMOTE)) {
+        AbortMatchStart("player list not ready (both players not yet in the lobby)");
+        return;
+    }
 
     GGPOSessionCallbacks cb = { 0 };
     cb.begin_game = ggpo_begin_game_callback;
@@ -726,8 +749,8 @@ void fSystem::StartGGPO(GGPOPlayer* inPlayers, int numPlayers, int port, int fra
         port
     );
     if (result != GGPO_OK) {
-        spdlog::error("GGPO session could not start: {}", (int)result);
-        MessageBoxA(NULL, "GGPO could not start, check logs", NULL, MB_OK);
+        AbortMatchStart("ggpo_start_session failed");
+        return;
     }
     // A 1s timeout dropped a real match on the first WiFi hiccup. Ten seconds
     // is what rollback games actually ship with; notify at two so the UI can
@@ -740,9 +763,10 @@ void fSystem::StartGGPO(GGPOPlayer* inPlayers, int numPlayers, int port, int fra
         players[i].type = inPlayers[i].type;
         result = ggpo_add_player(ggpo, inPlayers + i, &players[i].handle);
         if (!GGPO_SUCCEEDED(result)) {
-            spdlog::error("GGPO session could not add player: {}", (int)result);
-            MessageBoxA(NULL, "GGPO could not add player", NULL, MB_OK);
-            continue;
+            ggpo_close_session(ggpo);
+            ggpo = nullptr;
+            AbortMatchStart("ggpo_add_player failed");
+            return;
         }
 
         if (players[i].type == GGPO_PLAYERTYPE_LOCAL) {
