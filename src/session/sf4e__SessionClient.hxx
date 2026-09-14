@@ -18,6 +18,11 @@ namespace sf4e {
 	public:
 		static bool bVerboseLogging;
 
+		// Set when a match was ended because the two games' authoritative state
+		// forked (a real desync). The lobby reads it to show the player why the
+		// match dropped, then clears it.
+		static bool bDesyncAbort;
+
 		enum ErrorType {
 			SCE_UNKNOWN,
 			SCE_JOIN_REJECTED_HASH_INVALID,

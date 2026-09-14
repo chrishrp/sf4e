@@ -40,16 +40,24 @@ namespace {
 	// never aborts on divergence. So log the field diff for diagnosis and PLAY
 	// ON. A future build fixes the underlying drift; until then a match is far
 	// better finished than voided every few seconds.
-	bool g_leaveOnDesync = false;   // opt-in, for debugging only
 	int g_desyncLogged = 0;
-	void HandleDesync(int frame, const std::string& diff) {
+	void HandleDesync(int frame, const SessionProtocol::StateSnapshot& mine, const SessionProtocol::StateSnapshot& theirs) {
+		bool gameplay = SessionProtocol::SnapshotGameplayDiffers(mine, theirs);
 		// Rate-limited: the first several, then occasional, so a drifting
 		// value cannot flood the log across a long match.
-		if (g_desyncLogged < 8 || (g_desyncLogged % 120) == 0) {
-			spdlog::warn("State divergence at frame {} (match continues): {}", frame, diff);
+		if (gameplay || g_desyncLogged < 8 || (g_desyncLogged % 120) == 0) {
+			spdlog::warn("State divergence at frame {} ({}): {}",
+				frame,
+				gameplay ? "GAMEPLAY forked - ending match" : "position drift only, continuing",
+				SessionProtocol::DescribeSnapshotDiff(mine, theirs));
 		}
 		g_desyncLogged++;
-		if (g_leaveOnDesync) {
+		// Only an authoritative fork ends the match: health, meter, animation
+		// or side actually disagree, so the two games can no longer be the same
+		// match. A position-only drift is left alone -- ending on that threw
+		// players out over a cosmetic float.
+		if (gameplay) {
+			SessionClient::bDesyncAbort = true;
 			rSystem* system = rSystem::staticMethods.GetSingleton();
 			if (system) {
 				*rSystem::GetReadyState(system) = rSystem::RS_ISLEAVING;
@@ -60,6 +68,7 @@ namespace {
 
 SessionClient* SessionClient::s_pCallbackInstance;
 bool SessionClient::bVerboseLogging = false;
+bool SessionClient::bDesyncAbort = false;
 
 SessionClient::SessionClient(
 	const Callbacks& callbacks,
@@ -306,7 +315,7 @@ int SessionClient::Step()
 						spdlog::warn("Spectator: my view differs from the players at frame {}: {}", m.snapshot.frameIdx, diff);
 					}
 					else {
-						HandleDesync(m.snapshot.frameIdx, diff);
+						HandleDesync(m.snapshot.frameIdx, localSnapshot, m.snapshot);
 					}
 				}
 
@@ -391,7 +400,7 @@ int SessionClient::Step()
 							spdlog::warn("Spectator: my view differs from the players at frame {} (pending): {}", localSnapshotIter->first, diff);
 						}
 						else {
-							HandleDesync(localSnapshotIter->first, diff);
+							HandleDesync(localSnapshotIter->first, localSnapshot, remoteSnapshotIter->second);
 						}
 					}
 					localSnapshotIter->second.second.confirmed = true;

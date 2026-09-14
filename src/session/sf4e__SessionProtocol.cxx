@@ -88,5 +88,22 @@ namespace sf4e {
 			}
 			return out;
 		}
+
+		bool SnapshotGameplayDiffers(const StateSnapshot& a, const StateSnapshot& b) {
+			for (int i = 0; i < 2; i++) {
+				const StateSnapshot::CharaStateSnapshot& m = a.chara[i];
+				const StateSnapshot::CharaStateSnapshot& r = b.chara[i];
+				if (m.status != r.status) return true;
+				if (m.side != r.side) return true;
+				#define FPD(x) if (m.x.integral != r.x.integral || m.x.fractional != r.x.fractional) return true
+				FPD(vit); FPD(vitmax); FPD(revenge); FPD(revengemax);
+				FPD(recoverable); FPD(recoverablemax); FPD(super); FPD(supermax);
+				FPD(sctimeamt); FPD(sctimemax); FPD(uctime); FPD(uctimemax);
+				FPD(damage); FPD(combodamage);
+				#undef FPD
+				// rootPos is intentionally not checked: a derived render float.
+			}
+			return false;
+		}
 	}
 }

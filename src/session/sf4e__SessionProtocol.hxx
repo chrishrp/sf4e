@@ -286,6 +286,13 @@ namespace sf4e {
 		// values. One place, used by the online desync report and the local sync
 		// test alike, so a divergence always says exactly what drifted.
 		std::string DescribeSnapshotDiff(const StateSnapshot& mine, const StateSnapshot& theirs);
+
+		// True if the two states differ in authoritative gameplay -- health,
+		// meter, animation state, side -- as opposed to only the derived float
+		// render position (rootPos). A gameplay difference means the fights
+		// have genuinely forked and the match cannot continue; a position-only
+		// difference is drift that has not (yet) changed the outcome.
+		bool SnapshotGameplayDiffers(const StateSnapshot& a, const StateSnapshot& b);
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(BattleLoaded, type);
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(BattleSynced, type);
 	}

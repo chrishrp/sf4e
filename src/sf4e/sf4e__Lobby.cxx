@@ -1046,6 +1046,16 @@ void sf4e::Lobby::Draw() {
 			g_resultCursor = 0;
 			g_screen = SC_RESULT;
 		}
+
+		// The match was ended because the two games' state forked (a real
+		// desync), not because someone won. Tell the player plainly.
+		if (sf4e::SessionClient::bDesyncAbort) {
+			sf4e::SessionClient::bDesyncAbort = false;
+			g_hasResult = false;
+			g_screen = SC_LOBBY;
+			g_lobbyRow = 2;
+			Flash("The match desynced and had to stop. Ready up to try again.");
+		}
 	}
 
 	ImGuiIO& io = ImGui::GetIO();
