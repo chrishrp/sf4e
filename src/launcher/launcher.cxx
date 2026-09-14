@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <fstream>
 #include <string>
+#include <vector>
 
 #include <CLI/CLI.hpp>
 #include <detours/detours.h>
@@ -312,45 +313,37 @@ int UpdatePath(const wchar_t* const szLauncherDirW, wchar_t* const szErrorString
 	// useful for the launcher itself, child processes inherit the parent's
 	// environment by default, so the child SF4 process will search in the
 	// launcher directory for DLLs.
-	const int nPathBufSize = 2048;
-	wchar_t szPathW[nPathBufSize] = { 0 };
-	wchar_t szNewPathW[nPathBufSize] = { 0 };
+	//
+	// PATH can be far longer than any fixed buffer. A hard-coded 2048-char
+	// buffer made the launcher exit silently -- no window, no log -- for anyone
+	// with a long PATH (issue #1). Query the exact size, allocate for it, and
+	// never treat a PATH problem as fatal: if we can't update it, run anyway.
+	(void)szErrorStringW;
+	(void)nErrorStringLen;
 
-	DWORD nPathSize = GetEnvironmentVariableW(L"PATH", szPathW, 2048);
-	DWORD res;
-
-	if (nPathSize == 0) {
+	DWORD nNeeded = GetEnvironmentVariableW(L"PATH", nullptr, 0);
+	if (nNeeded == 0) {
 		DWORD err = GetLastError();
 		if (err != ERROR_ENVVAR_NOT_FOUND) {
 			spdlog::warn(L"UpdatePath: GetEnvironmentVariable(\"PATH\", ...) failed: {}", err);
 		}
-		return 0;
+		// No PATH at all: set it to just the launcher directory.
+		SetEnvironmentVariableW(L"PATH", szLauncherDirW);
+		return 1;
 	}
 
-	if (nPathSize >= nPathBufSize) {
-		spdlog::warn(L"UpdatePath: buffer too small; had {}, needed {}", nPathBufSize, nPathSize);
-		return 0;
+	size_t total = (size_t)nNeeded + wcslen(szLauncherDirW) + 2;  // ';' + NUL
+	std::vector<wchar_t> buf(total, L'\0');
+	DWORD nGot = GetEnvironmentVariableW(L"PATH", buf.data(), nNeeded);
+	if (nGot == 0 || nGot >= nNeeded) {
+		spdlog::warn(L"UpdatePath: PATH changed while reading; leaving it unmodified");
+		return 1;  // non-fatal
 	}
-
-	if ((res = StringCchPrintf(
-		szNewPathW,
-		2048,
-		TEXT("%s;%s"),
-		szPathW,
-		szLauncherDirW
-	)) != S_OK) {
-		StringCchPrintfW(
-			szErrorStringW,
-			nErrorStringLen,
-			L"Could not create new PATH environment variable %s;%s : %d",
-			szPathW,
-			szLauncherDirW,
-			res
-		);
-		MessageBoxW(NULL, szErrorStringW, NULL, MB_OK);
-		return 0;
+	wcscat_s(buf.data(), total, L";");
+	wcscat_s(buf.data(), total, szLauncherDirW);
+	if (!SetEnvironmentVariableW(L"PATH", buf.data())) {
+		spdlog::warn(L"UpdatePath: SetEnvironmentVariable failed: {}", GetLastError());
 	}
-	SetEnvironmentVariableW(L"PATH", szNewPathW);
 	return 1;
 }
 

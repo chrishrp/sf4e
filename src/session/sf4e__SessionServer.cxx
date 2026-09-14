@@ -673,5 +673,12 @@ void SessionServer::HandleResults(int loserIndex) {
 	for (auto iter = clients.begin(); iter != clients.end(); iter++) {
 		iter->data.watching = false;
 	}
-	_matchData.Clear();
+	// Require both players to ready again for the next match, but KEEP the
+	// characters, stage and seed. Clearing them here raced with a rematch: if
+	// one player re-selected before the other's result message arrived, the
+	// clear wiped the pick, producing an empty Ryu-vs-Ryu rematch with no stage
+	// (seen after a draw). The rematch re-sends chara/stage/seed anyway, in
+	// order before its ready, so keeping the old values is always safe.
+	_matchData.readyMessageNum[0] = -1;
+	_matchData.readyMessageNum[1] = -1;
 }
