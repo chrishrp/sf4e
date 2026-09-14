@@ -87,30 +87,33 @@ rKey::MementoID GGPO_MEMENTO_ID = { 1, 1 };
 
 // Floating-point mode consistency for rollback determinism.
 //
-// Direct3D 9 resets the FPU control word (precision and rounding) while it
-// renders, unless the device was created with D3DCREATE_FPU_PRESERVE, which
-// this game does not use. So the control word in force when a frame is first
-// simulated can differ from the one in force when GGPO rolls back and
-// re-simulates that same frame -- and can differ between two machines whose
-// frames interleave with rendering differently. Either way the float math
-// (positions, physics) then produces slightly different results and the
-// games drift apart. Capture the control word the game's own simulation uses
-// on the first battle frame, then re-assert exactly that before every
-// simulated frame and every rollback re-simulation, so all of them agree.
-// Using the game's own captured word means we never impose a mode it did not
-// choose; if the word never changes this is a no-op.
-static unsigned int g_fpControlWord = 0;
-static bool g_fpControlCaptured = false;
+// Two peers only stay in sync if their float physics computes bit-identically.
+// The FPU control word (precision, rounding, denormal handling) decides that,
+// and it is NOT the same everywhere: Direct3D 9 resets it while rendering
+// (this game does not use D3DCREATE_FPU_PRESERVE), and different CPUs, drivers
+// and Windows builds leave it in different states. When two machines run the
+// physics under different words, positions drift apart by a tiny amount every
+// frame and the match desyncs -- even on a perfect connection. This was seen
+// as one specific opponent whose PC desynced from everyone while others played
+// flawlessly at the same ping.
+//
+// An earlier version pinned each machine to its OWN captured word, which fixed
+// rollback-vs-original consistency within a machine but did nothing to make
+// two machines agree. Instead, force the SAME fixed word on every machine:
+// round-to-nearest, 53-bit (double) precision, denormals preserved -- the
+// MSVC/CRT default -- reasserted before every simulated and re-simulated
+// frame. Every peer then does the physics identically regardless of hardware.
+static bool g_fpLogged = false;
 
 static void EnforceSimFpControl() {
     unsigned int current = 0;
-    if (!g_fpControlCaptured) {
-        _controlfp_s(&current, 0, 0);   // read
-        g_fpControlWord = current;
-        g_fpControlCaptured = true;
-        return;
+    if (!g_fpLogged) {
+        _controlfp_s(&current, 0, 0);   // read what this machine was left in
+        spdlog::info("Sim FP: machine word 0x{:08x} (PC=0x{:x} RC=0x{:x} DN=0x{:x}) -> pinning to PC_53|RC_NEAR|DN_SAVE",
+            current, current & _MCW_PC, current & _MCW_RC, current & _MCW_DN);
+        g_fpLogged = true;
     }
-    _controlfp_s(&current, g_fpControlWord, _MCW_PC | _MCW_RC | _MCW_DN);
+    _controlfp_s(&current, _PC_53 | _RC_NEAR | _DN_SAVE, _MCW_PC | _MCW_RC | _MCW_DN);
 }
 
 bool fSystem::extendedLoadRequest = false;
@@ -717,7 +720,7 @@ static void AbortMatchStart(const char* why) {
 
 void fSystem::StartGGPO(GGPOPlayer* inPlayers, int numPlayers, int port, int frameDelay, DWORD rngSeed) {
     // Re-capture the simulation FP mode fresh for this match.
-    g_fpControlCaptured = false;
+    g_fpLogged = false;   // log the machine's FP word once per match
 
     // A match needs exactly two players in slots 1 and 2. On a poor connection
     // the lobby data can be momentarily incomplete when the match fires, and a
