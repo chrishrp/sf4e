@@ -99,21 +99,27 @@ rKey::MementoID GGPO_MEMENTO_ID = { 1, 1 };
 //
 // An earlier version pinned each machine to its OWN captured word, which fixed
 // rollback-vs-original consistency within a machine but did nothing to make
-// two machines agree. Instead, force the SAME fixed word on every machine:
-// round-to-nearest, 53-bit (double) precision, denormals preserved -- the
-// MSVC/CRT default -- reasserted before every simulated and re-simulated
-// frame. Every peer then does the physics identically regardless of hardware.
+// two machines agree. Instead, force the SAME fixed word on every machine,
+// before every simulated and re-simulated frame, so every peer does the physics
+// identically regardless of hardware.
+//
+// The mode to force is the one the game actually runs at, observed in the log
+// as PC=0x20000 (_PC_24, single precision) | _RC_NEAR | _DN_SAVE. Forcing that
+// is a no-op on machines already there (the working majority) and pulls an
+// outlier -- a PC whose CPU/driver/D3D left the FPU in a different state -- into
+// line. (An earlier build wrongly forced _PC_53, the CRT default, which is NOT
+// what this game uses.)
 static bool g_fpLogged = false;
 
 static void EnforceSimFpControl() {
     unsigned int current = 0;
     if (!g_fpLogged) {
         _controlfp_s(&current, 0, 0);   // read what this machine was left in
-        spdlog::info("Sim FP: machine word 0x{:08x} (PC=0x{:x} RC=0x{:x} DN=0x{:x}) -> pinning to PC_53|RC_NEAR|DN_SAVE",
+        spdlog::info("Sim FP: machine word 0x{:08x} (PC=0x{:x} RC=0x{:x} DN=0x{:x}) -> pinning to PC_24|RC_NEAR|DN_SAVE",
             current, current & _MCW_PC, current & _MCW_RC, current & _MCW_DN);
         g_fpLogged = true;
     }
-    _controlfp_s(&current, _PC_53 | _RC_NEAR | _DN_SAVE, _MCW_PC | _MCW_RC | _MCW_DN);
+    _controlfp_s(&current, _PC_24 | _RC_NEAR | _DN_SAVE, _MCW_PC | _MCW_RC | _MCW_DN);
 }
 
 bool fSystem::extendedLoadRequest = false;
