@@ -241,6 +241,12 @@ namespace sf4e {
 			};
 
 			int frameIdx;
+			// Battle-flow state (which phase of the round: fighting, KO,
+			// round-over, next-round), for diagnosing a round-transition
+			// desync: if these differ, the two machines are in different
+			// rounds. Diagnostic only -- not part of the abort decision.
+			int battleFlow = 0;
+			int battleFlowSubstate = 0;
 			CharaStateSnapshot chara[2];
 		};
 
@@ -279,7 +285,8 @@ namespace sf4e {
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ForwardMessage, type, src, dest, msg);
 
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(StateSnapshot::CharaStateSnapshot, status, rootPos, side, vit, vitmax, revenge, revengemax, recoverable, recoverablemax, super, supermax, sctimeamt, sctimemax, uctime, uctimemax, damage, combodamage);
-		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(StateSnapshot, frameIdx, chara);
+		// (StateSnapshot itself is defined below with battleFlow included.)
+		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(StateSnapshot, frameIdx, battleFlow, battleFlowSubstate, chara);
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(BattleSnapshot, type, snapshot);
 
 		// Names every snapshot field that differs between two states, with both

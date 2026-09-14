@@ -57,6 +57,13 @@ namespace sf4e {
 
 		std::string DescribeSnapshotDiff(const StateSnapshot& mine, const StateSnapshot& theirs) {
 			std::string out;
+			if (mine.battleFlow != theirs.battleFlow) {
+				out += "battleFlow a=" + std::to_string(mine.battleFlow) + " b=" + std::to_string(theirs.battleFlow);
+			}
+			if (mine.battleFlowSubstate != theirs.battleFlowSubstate) {
+				if (!out.empty()) out += ", ";
+				out += "battleFlowSubstate a=" + std::to_string(mine.battleFlowSubstate) + " b=" + std::to_string(theirs.battleFlowSubstate);
+			}
 			for (int i = 0; i < 2; i++) {
 				const StateSnapshot::CharaStateSnapshot& m = mine.chara[i];
 				const StateSnapshot::CharaStateSnapshot& r = theirs.chara[i];

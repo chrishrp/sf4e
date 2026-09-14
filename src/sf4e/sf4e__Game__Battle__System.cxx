@@ -987,6 +987,8 @@ void fSystem::CaptureSnapshot(rSystem* src) {
 
 void fSystem::BuildSnapshot(rSystem* src, StateSnapshot& snapshot) {
     snapshot.frameIdx = rSystem::GetNumFramesSimulated_FixedPoint(src)->integral;
+    snapshot.battleFlow = (int)*rSystem::staticVars.CurrentBattleFlow;
+    snapshot.battleFlowSubstate = (int)*rSystem::staticVars.CurrentBattleFlowSubstate;
 
     CharaActor::__publicMethods& methods = CharaActor::publicMethods;
     CharaUnit* lpCharaUnit = (src->*rSystem::publicMethods.GetCharaUnit)();
