@@ -1,6 +1,54 @@
---- a/src/lib/ggpo/sync.cpp	2026-09-14 20:19:15.644158300 +0200
-+++ b/src/lib/ggpo/sync.cpp	2026-09-14 20:19:50.908800700 +0200
-@@ -130,6 +130,40 @@
+--- a/src/lib/ggpo/sync.cpp	2026-09-15 12:12:40.745172500 +0200
++++ b/src/lib/ggpo/sync.cpp	2026-09-15 12:20:39.105730300 +0200
+@@ -7,6 +7,20 @@
+ 
+ #include "sync.h"
+ 
++// sf4e: how many frames every peer is forced to roll back and re-simulate each
++// frame (see Sync::CheckSimulation). Keeps both peers permanently in the
++// "restored" state so the host game's lossy actor restore runs identically on
++// both and they stay in sync under asymmetric latency (CGNAT). Must be <=
++// MAX_PREDICTION_FRAMES so the target stays inside the saved-state ring, and it
++// drives how many extra confirmed inputs SetLastConfirmedFrame retains.
++#define SF4E_FORCED_ROLLBACK_DEPTH 2
++
++// sf4e: a unique marker baked into the compiled binary so a build can be
++// verified to actually contain this patch (grep GGPO.dll for the string).
++// Referenced from CheckSimulation via a volatile read so the linker keeps it.
++extern const volatile char* const SF4E_ROLLBACK_TAG;
++const volatile char* const SF4E_ROLLBACK_TAG = "SF4E_SYMROLLBACK_ROBUST_D2";
++
+ Sync::Sync(UdpMsg::connect_status *connect_status) :
+  _local_connect_status(connect_status),
+  _input_queues(NULL)
+@@ -44,12 +58,22 @@
+ }
+ 
+ void
+-Sync::SetLastConfirmedFrame(int frame) 
+-{   
++Sync::SetLastConfirmedFrame(int frame)
++{
+    _last_confirmed_frame = frame;
+    if (_last_confirmed_frame > 0) {
+-      for (int i = 0; i < _config.num_players; i++) {
+-         _input_queues[i].DiscardConfirmedFrames(frame - 1);
++      // sf4e: keep SF4E_FORCED_ROLLBACK_DEPTH extra confirmed frames' inputs
++      // instead of discarding right up to the confirmed frame. The forced
++      // symmetric rollback in CheckSimulation re-simulates a fixed depth every
++      // frame - even on a peer that is fully caught up and would otherwise have
++      // no predicted frames to roll back through - and re-simulation needs
++      // those inputs. Without the margin, a caught-up peer's forced rollback
++      // would request a discarded input and GGPO asserts (input_queue.cpp).
++      int discardTo = frame - 1 - SF4E_FORCED_ROLLBACK_DEPTH;
++      if (discardTo >= 0) {
++         for (int i = 0; i < _config.num_players; i++) {
++            _input_queues[i].DiscardConfirmedFrames(discardTo);
++         }
+       }
+    }
+ }
+@@ -130,6 +154,50 @@
     int seek_to;
     if (!CheckSimulationConsistency(&seek_to)) {
        AdjustSimulation(seek_to);
@@ -9,34 +57,44 @@
 +
 +   // sf4e: force SYMMETRIC rollback. The host game's actor save/restore is
 +   // lossy (non-idempotent), so a peer that rolls back drifts from a peer that
-+   // does not. Asymmetric latency (e.g. CGNAT) makes only one peer
-+   // mispredict-and-roll-back, so only that peer picks up the restore error and
-+   // the two sims fork. By rolling every peer back to the last AGREED frame on
-+   // EVERY frame, the identical lossy restore runs on both, so they carry the
-+   // same error and stay in sync. Only runs when prediction was already correct
-+   // (the branch above handled a real misprediction). Bounded to the saved ring
-+   // so LoadFrame never faults.
++   // does not. Asymmetric latency (e.g. CGNAT) makes only ONE peer roll back,
++   // so only that peer picks up the restore error and the two sims fork. Here,
++   // when prediction was correct (no rollback above), we still roll back a
++   // fixed depth and re-simulate, every frame, on every peer - so the identical
++   // lossy restore runs on both and they carry the same error.
++   //
++   // Bounds that MUST hold or GGPO asserts:
++   //  - target < _framecount: an actual rollback happens.
++   //  - target >= the retained input tail, or GetInput asserts. The tail is
++   //    (_last_confirmed_frame - SF4E_FORCED_ROLLBACK_DEPTH): SetLastConfirmedFrame
++   //    keeps exactly that margin (and DiscardConfirmedFrames may keep even more,
++   //    never less). So we clamp target up to that floor - this holds even in the
++   //    edge where the confirmed frame has run ahead of _framecount.
++   //  - target must be an actually-saved frame, or LoadFrame asserts; verified
++   //    against the ring below before use (so an out-of-ring target just skips).
 +   static bool s_force_symmetric_rollback = true;
++   static const volatile char* volatile s_tag = SF4E_ROLLBACK_TAG;
++   (void)s_tag;
 +   if (s_force_symmetric_rollback && _framecount > 0) {
-+      int target = _last_confirmed_frame;
-+      int oldest = _framecount - MAX_PREDICTION_FRAMES;
-+      if (target < oldest) {
-+         target = oldest;
++      int inputTail = _last_confirmed_frame - SF4E_FORCED_ROLLBACK_DEPTH;
++      if (inputTail < 0) {
++         inputTail = 0;
 +      }
-+      if (target >= _framecount) {
-+         target = _framecount - 1;
++      int target = _framecount - SF4E_FORCED_ROLLBACK_DEPTH;
++      if (target < inputTail) {
++         target = inputTail;   // never re-simulate a frame whose input was dropped
 +      }
-+      bool saved = false;
 +      if (target >= 0 && target < _framecount) {
++         bool saved = false;
 +         for (int i = 0; i < ARRAY_SIZE(_savedstate.frames); i++) {
 +            if (_savedstate.frames[i].frame == target) {
 +               saved = true;
 +               break;
 +            }
 +         }
-+      }
-+      if (saved) {
-+         AdjustSimulation(target);
++         if (saved) {
++            AdjustSimulation(target);
++         }
 +      }
     }
  }
