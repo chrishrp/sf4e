@@ -7,7 +7,6 @@ vcpkg_from_github(
         "install-cmake-export.patch"
         "synctest-no-debugbreak.patch"
         "spectator-robustness.patch"
-        "force-symmetric-rollback.patch"
 )
 
 vcpkg_cmake_configure(
