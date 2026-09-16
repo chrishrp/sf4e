@@ -597,7 +597,7 @@ namespace {
 			Slant(dl, ImVec2(40, 168), ImVec2(ds.x - 40, 210), GOLD, 8);
 			dl->AddText(g_fontBody, 24, ImVec2(66, 176), INK, msg);
 			if (in.alt) {
-				ShellExecuteA(NULL, "open", "https://github.com/fabeloper/sf4e/releases/latest", NULL, NULL, SW_SHOWNORMAL);
+				ShellExecuteA(NULL, "open", "https://github.com/fabeloper/sf4enhanced/releases/latest", NULL, NULL, SW_SHOWNORMAL);
 				Flash("Opening the download page in your browser", true);
 			}
 		}
