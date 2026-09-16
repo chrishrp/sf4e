@@ -1,7 +1,10 @@
 #include <string>
 #include <utility>
 #include <vector>
+// Not needed by anything here; kept Windows-only so the Linux server builds.
+#ifdef _WIN32
 #include <windows.h>
+#endif
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>

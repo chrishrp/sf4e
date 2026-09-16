@@ -1,6 +1,11 @@
 #pragma once
 
+// windows.h is not actually used by anything in this header, and the Linux
+// build of the lobby server needs FixedPoint. Keep it on Windows so existing
+// translation units that leaned on the transitive include still compile.
+#ifdef _WIN32
 #include <windows.h>
+#endif
 #include <nlohmann/json.hpp>
 
 namespace Dimps {

@@ -13,9 +13,8 @@
 // last address seen on the other, so neither side has to be recognised by
 // its address, which a symmetric NAT would defeat.
 
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#include <windows.h>
+// Winsock on Windows, POSIX sockets elsewhere. See net_compat.hxx.
+#include "net_compat.hxx"
 
 #include <chrono>
 #include <memory>
@@ -54,10 +53,19 @@ namespace {
 
 	volatile bool g_running = true;
 
+#ifdef _WIN32
 	BOOL WINAPI OnConsoleCtrl(DWORD) {
 		g_running = false;
 		return TRUE;
 	}
+#else
+	// Same job as the console handler: drop out of the main loop so the
+	// shutdown path runs. SIGTERM matters as much as SIGINT here, because that
+	// is what systemd sends when the service is stopped or the box reboots.
+	void OnSignal(int) {
+		g_running = false;
+	}
+#endif
 
 	SOCKET OpenUdp(uint16_t port) {
 		SOCKET s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
@@ -358,10 +366,19 @@ namespace {
 int main(int argc, char** argv) {
 	spdlog::set_default_logger(spdlog::stdout_color_mt("lobby"));
 	spdlog::set_pattern("[%H:%M:%S] %^%l%$ %v");
+#ifdef _WIN32
 	SetConsoleCtrlHandler(OnConsoleCtrl, TRUE);
 
 	WSADATA wsa;
 	WSAStartup(MAKEWORD(2, 2), &wsa);
+#else
+	signal(SIGINT, OnSignal);
+	signal(SIGTERM, OnSignal);
+	// A client that vanishes can leave us writing to a dead socket, and the
+	// default action for SIGPIPE is to kill the process. Ignore it and handle
+	// the error at the call site like any other send failure.
+	signal(SIGPIPE, SIG_IGN);
+#endif
 
 	SteamDatagramErrMsg errMsg;
 	if (!GameNetworkingSockets_Init(nullptr, errMsg)) {

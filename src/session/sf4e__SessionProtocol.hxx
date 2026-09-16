@@ -2,20 +2,56 @@
 
 #include <string>
 #include <utility>
+#include <vector>
+#include <cstdint>
 
 
 #include <GameNetworkingSockets/steam/isteamnetworkingutils.h>
 #include <nlohmann/json.hpp>
 
-#include "../Dimps/Dimps__GameEvents.hxx"
 #include "../Dimps/Dimps__Math.hxx"
+
+// The lobby server builds for Linux, where the game-reversing headers cannot
+// follow: Dimps__GameEvents.hxx reaches Dimps__Platform.hxx, which includes
+// <d3d9.h>. The protocol only ever needed two PODs out of all that, so on
+// Windows we alias the real game types (keeping every existing client
+// assignment valid and the layout identical by construction), and elsewhere we
+// declare layout-compatible standalone copies.
+#ifdef _WIN32
+#include "../Dimps/Dimps__GameEvents.hxx"
+#endif
 
 #define MAX_SF4E_PROTOCOL_USERS 4
 #define MAX_SF4E_SPECTATORS 2
 
 namespace sf4e {
 	namespace SessionProtocol {
-		typedef Dimps::Math::FixedPoint FixedPoint; 
+		typedef Dimps::Math::FixedPoint FixedPoint;
+
+#ifdef _WIN32
+		// The game's own type, so client code assigning a live
+		// ConfirmedCharaConditions into MatchData keeps compiling unchanged.
+		typedef Dimps::GameEvents::VsMode::ConfirmedCharaConditions CharaConditions;
+#else
+		// Server-side copy. Field names and order must match the Windows type
+		// exactly: they are what the JSON serialiser writes, so a mismatch
+		// would silently break the wire format between server and clients.
+		struct CharaConditions {
+			uint8_t charaID;
+			uint8_t costume;
+			uint8_t color;
+			uint8_t _unused;
+			uint8_t personalAction;
+			uint8_t winQuote;
+			uint8_t ultraCombo;
+			uint8_t handicap;
+			uint8_t unc_edition;
+		};
+		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(
+			CharaConditions,
+			charaID, costume, color, _unused, personalAction,
+			winQuote, ultraCombo, handicap, unc_edition);
+#endif
 
 		// Connection IDs are ephemeral and reusable- they can be used to
 		// distinguish clients from each other, but should not be used as
@@ -88,9 +124,9 @@ namespace sf4e {
 			bool IsAllReady();
 
 			int64_t readyMessageNum[2];
-			Dimps::GameEvents::VsMode::ConfirmedCharaConditions chara[2];
+			CharaConditions chara[2];
 			int64_t stageID;
-			DWORD rngSeed;
+			uint32_t rngSeed;   // was DWORD; identical width, and portable
 		};
 
 		enum MessageType {
@@ -203,7 +239,7 @@ namespace sf4e {
 
 		struct PreBattleSetChara {
 			MessageType type = MT_PREBATTLE_SETCHARA;
-			Dimps::GameEvents::VsMode::ConfirmedCharaConditions chara;
+			CharaConditions chara;
 		};
 
 		struct PreBattleSetStage {

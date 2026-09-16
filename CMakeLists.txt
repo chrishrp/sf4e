@@ -16,16 +16,29 @@ add_compile_definitions(WIN32_LEAN_AND_MEAN)
 # reports it on a ping.
 add_compile_definitions(SF4E_VERSION="${PROJECT_VERSION}")
 
-find_library(LIB_DETOURS "detours")
-find_package(CLI11 CONFIG REQUIRED)
+# Always needed -- these three are all the lobby server depends on, which is
+# what lets it build for a cheap Linux VPS.
 find_package(GameNetworkingSockets CONFIG REQUIRED)
-find_package(ggpo CONFIG REQUIRED)
-find_package(imgui CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
-find_package(protobuf CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
 
-find_path(VALVEFILEVDF_INCLUDE_DIRS "vdf_parser.hpp")
+# Everything below is for the game-side build only: it hooks a Windows game
+# binary, so Detours, Direct3D, the overlay and the launcher have no meaning on
+# Linux and their packages are not expected to be installed there.
+if(WIN32)
+    find_library(LIB_DETOURS "detours")
+    find_package(CLI11 CONFIG REQUIRED)
+    find_package(ggpo CONFIG REQUIRED)
+    find_package(imgui CONFIG REQUIRED)
+    find_package(protobuf CONFIG REQUIRED)
+
+    find_path(VALVEFILEVDF_INCLUDE_DIRS "vdf_parser.hpp")
+endif()
+
+# --- Game-side targets: Windows only -----------------------------------------
+# These exist to inject into and reverse the Windows game binary. The lobby
+# server below is deliberately independent of all of them.
+if(WIN32)
 
 add_library(Dimps STATIC
     "src/Dimps/Dimps.hxx"
@@ -114,26 +127,56 @@ target_link_libraries(
     PUBLIC imgui::imgui nlohmann_json::nlohmann_json spdlog::spdlog GameNetworkingSockets::shared ggpo::GGPO
 )
 
-add_library(Session STATIC
-    "src/session/sf4e__SessionClient.hxx"
-    "src/session/sf4e__SessionClient.cxx"
+endif() # WIN32: end of the game-side targets
+
+# --- Session library: builds everywhere --------------------------------------
+# Shared by the game client and the lobby server. It uses only two PODs from the
+# Dimps headers (FixedPoint and the chara conditions), and calls no Dimps code,
+# so off Windows it compiles without that library at all.
+set(SESSION_SOURCES
     "src/session/sf4e__SessionProtocol.hxx"
     "src/session/sf4e__SessionProtocol.cxx"
     "src/session/sf4e__SessionServer.hxx"
     "src/session/sf4e__SessionServer.cxx"
 )
+if(WIN32)
+    # The client half drives the game: it pulls in the Dimps headers, the battle
+    # system and GGPO, none of which exist on the server. The lobby server never
+    # references it, so it simply is not part of a Linux build.
+    list(APPEND SESSION_SOURCES
+        "src/session/sf4e__SessionClient.hxx"
+        "src/session/sf4e__SessionClient.cxx"
+    )
+endif()
+
+add_library(Session STATIC ${SESSION_SOURCES})
 target_link_libraries(
     Session
-    PRIVATE Dimps
     PUBLIC nlohmann_json::nlohmann_json spdlog::spdlog GameNetworkingSockets::shared
 )
+if(WIN32)
+    target_link_libraries(Session PRIVATE Dimps)
+endif()
 
-add_executable(SessionInteractiveTest "src/session/interactive_test.cxx")
-target_link_libraries(SessionInteractiveTest PRIVATE nlohmann_json::nlohmann_json imgui::imgui spdlog::spdlog Dimps sf4e Session "d3d9")
-# target_link_options(SessionInteractiveTest PRIVATE "/entry:wWinMainCRTStartup")
+if(WIN32)
+    add_executable(SessionInteractiveTest "src/session/interactive_test.cxx")
+    target_link_libraries(SessionInteractiveTest PRIVATE nlohmann_json::nlohmann_json imgui::imgui spdlog::spdlog Dimps sf4e Session "d3d9")
+    # target_link_options(SessionInteractiveTest PRIVATE "/entry:wWinMainCRTStartup")
+endif()
 
+# --- Lobby server: builds everywhere -----------------------------------------
 add_executable(LobbyServer src/server/lobby_server.cxx)
-target_link_libraries(LobbyServer PRIVATE Session spdlog::spdlog nlohmann_json::nlohmann_json GameNetworkingSockets::shared "ws2_32")
+target_link_libraries(LobbyServer PRIVATE Session spdlog::spdlog nlohmann_json::nlohmann_json GameNetworkingSockets::shared)
+if(WIN32)
+    target_link_libraries(LobbyServer PRIVATE "ws2_32")
+else()
+    # GameNetworkingSockets spins its own threads.
+    find_package(Threads REQUIRED)
+    target_link_libraries(LobbyServer PRIVATE Threads::Threads)
+endif()
+
+# --- Launcher, sidecar and packaging: Windows only ---------------------------
+if(WIN32)
 
 # The lobby server address baked into the launcher. Kept out of the tree:
 # deploy/pack-all.cmd reads deploy/server.private (gitignored) and passes it
@@ -195,3 +238,5 @@ set(CPACK_PACKAGE_FILE_NAME "${PROJECT_NAME}-${PROJECT_VERSION}-win32")
 # One folder in the zip, so extracting never scatters loose files.
 set(CPACK_INCLUDE_TOPLEVEL_DIRECTORY ON)
 include(CPack)
+
+endif() # WIN32: end of launcher, sidecar and packaging

@@ -1,14 +1,17 @@
 {
   "name": "sf4e",
   "version-string": "0.0.1",
+  "$comment": "Most dependencies exist only for the Windows game-side build (injection, D3D9 overlay, GGPO, the launcher). The lobby server needs just three, so they are left unqualified and a Linux build pulls nothing else.",
   "dependencies": [
     {
       "name": "cli11",
-      "version>=": "2.4.2"
+      "version>=": "2.4.2",
+      "platform": "windows"
     },
     {
       "name": "detours",
-      "version>=": "4.0.1#7"
+      "version>=": "4.0.1#7",
+      "platform": "windows"
     },
     {
       "name": "gamenetworkingsockets",
@@ -16,7 +19,8 @@
     },
     {
       "name": "ggpo",
-      "version>=": "1.0.0#1"
+      "version>=": "1.0.0#1",
+      "platform": "windows"
     },
     {
       "name": "imgui",
@@ -24,7 +28,8 @@
       "features": [
         "dx9-binding",
         "win32-binding"
-      ]
+      ],
+      "platform": "windows"
     },
     {
       "name": "nlohmann-json",
@@ -35,11 +40,18 @@
       "version>=": "1.11.0",
       "features": [
         "wchar"
-      ]
+      ],
+      "platform": "windows"
+    },
+    {
+      "name": "spdlog",
+      "version>=": "1.11.0",
+      "platform": "!windows"
     },
     {
       "name": "valvefilevdf",
-      "version>=": "1.0.0#1"
+      "version>=": "1.0.0#1",
+      "platform": "windows"
     }
   ],
   "builtin-baseline": "fafcc0e93bfba303e5e48790def745d27e6d449b"
