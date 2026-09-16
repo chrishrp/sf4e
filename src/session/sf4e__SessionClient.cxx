@@ -194,9 +194,25 @@ int SessionClient::Step()
 		}
 
 		const char* start = (const char*)pIncomingMsg->m_pData;
-		json msg = json::parse(start, start + pIncomingMsg->m_cbSize);
 		SteamNetworkingIPAddr peerAddr = *(pIncomingMsg->m_identityPeer.GetIPAddr());
+		json msg;
+		// This is attacker-controlled input: anything that can reach this
+		// socket can put bytes here. An uncaught json::exception would call
+		// std::terminate and kill the game outright -- no crash report, no
+		// dump, nothing in the log. Drop the message instead. The server side
+		// already guarded its equivalent; this one was missed.
+		bool parsed = false;
+		try {
+			msg = json::parse(start, start + pIncomingMsg->m_cbSize);
+			parsed = true;
+		}
+		catch (const json::exception&) {
+			spdlog::warn("Client: dropped a malformed message");
+		}
 		pIncomingMsg->Release();
+		if (!parsed) {
+			continue;
+		}
 
 		SessionProtocol::MessageType type;
 		try {
