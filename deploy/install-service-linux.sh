@@ -62,6 +62,12 @@ User=sf4e
 # The shared libraries were copied next to the binary, because the RPATH baked
 # in at build time points into the builder's home directory.
 Environment=LD_LIBRARY_PATH=/opt/sf4e/lib
+# Aggregate usage stats (match counts and durations, lobby usage). No player
+# names, no IP addresses. systemd creates and owns /var/lib/sf4e; /opt is
+# read-only here because of ProtectSystem=strict, so it could not go there.
+StateDirectory=sf4e
+Environment=SF4E_STATS_FILE=/var/lib/sf4e/stats.jsonl
+Environment=SF4E_REGION=__REGION__
 ExecStart=/opt/sf4e/LobbyServer
 # Always come back, no matter how it died, and never give up: a rate limit here
 # would eventually leave players with no server at all.
@@ -81,6 +87,13 @@ ProtectHome=true
 [Install]
 WantedBy=multi-user.target
 UNIT
+
+# Label this server in the stats, so several regions can be told apart when
+# their files are compared. First argument wins, else $SF4E_REGION, else the
+# hostname.
+region="${1:-${SF4E_REGION:-$(hostname)}}"
+sudo sed -i "s|__REGION__|${region}|" /etc/systemd/system/sf4e-lobby.service
+echo "==> Stats region label: ${region}"
 
 echo "==> Opening UDP ports"
 if command -v ufw >/dev/null 2>&1; then

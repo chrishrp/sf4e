@@ -1,3 +1,7 @@
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <ctime>
 #include <string>
 #include <utility>
 #include <vector>
@@ -39,6 +43,15 @@ namespace SessionProtocol = sf4e::SessionProtocol;
 using Dimps::Math::FixedPoint;
 using sf4e::SessionServer;
 
+
+namespace {
+	// Monotonic milliseconds, so a clock adjustment cannot produce a negative
+	// or absurd match duration in the stats.
+	uint64_t NowMs() {
+		return (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(
+			std::chrono::steady_clock::now().time_since_epoch()).count();
+	}
+}
 
 const int sf4e::SESSION_SERVER_MAX_MESSAGES_PER_POLL = 200;
 SessionServer* SessionServer::s_pCallbackInstance;
@@ -451,6 +464,13 @@ int SessionServer::Step()
 		}
 		BroadcastMessage(json(updateMsg));
 		BroadcastMessage(json(SessionProtocol::LobbyAllReady()));
+
+		// Both sides are ready, so a match is starting now.
+		_matchStartMs = NowMs();
+		LogStat("match_start", {
+			{"players", PlayerCount()},
+			{"spectators", SpectatorCount()},
+		});
 	}
 
 	if (bSendBattleSynced) {
@@ -676,7 +696,44 @@ SessionProtocol::JoinResult SessionServer::RegisterToWait(
 	return SessionProtocol::JOIN_OK;
 }
 
+void SessionServer::LogStat(const std::string& event, const nlohmann::json& fields) {
+	// Opt-in: no environment variable, no file, no collection.
+	const char* path = std::getenv("SF4E_STATS_FILE");
+	if (path == nullptr || path[0] == 0) {
+		return;
+	}
+	json line = fields;
+	line["event"] = event;
+	line["ts"] = (int64_t)std::time(nullptr);
+	const char* region = std::getenv("SF4E_REGION");
+	if (region != nullptr && region[0] != 0) {
+		line["region"] = region;
+	}
+	// Append-and-close rather than holding the file open: this is written a
+	// couple of times per match, and it keeps the file safe to rotate or read
+	// while the server runs.
+	FILE* f = fopen(path, "a");
+	if (f == nullptr) {
+		return;
+	}
+	std::string s = line.dump();
+	fwrite(s.c_str(), 1, s.size(), f);
+	fputc('\n', f);
+	fclose(f);
+}
+
 void SessionServer::HandleResults(int loserIndex) {
+	// A result arrived, so the match finished rather than being abandoned.
+	// Duration tells us whether people are playing full sets or bouncing off
+	// something after a few seconds, which is the whole point of collecting it.
+	if (_matchStartMs != 0) {
+		LogStat("match_end", {
+			{"seconds", (int)((NowMs() - _matchStartMs) / 1000)},
+			{"spectators", SpectatorCount()},
+		});
+		_matchStartMs = 0;
+	}
+
 	// Winner stays as P1: the loser moves behind the other player, but
 	// never behind the spectators.
 	int nPlayers = PlayerCount();

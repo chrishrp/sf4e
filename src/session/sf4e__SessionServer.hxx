@@ -73,7 +73,19 @@ namespace sf4e {
 		);
 		void HandleResults(int loserSide);
 
+		// When the current match started, for the duration in the stats line.
+		// 0 means no match is running.
+		uint64_t _matchStartMs = 0;
+
 	public:
+		// Aggregate, non-identifying usage stats: how many matches are played,
+		// how long they last, how they end. Deliberately records NO player
+		// names and NO IP addresses -- those are personal data under GDPR, and
+		// they answer none of the questions this is for. One JSON object per
+		// line, appended to the file named by the SF4E_STATS_FILE environment
+		// variable; if that is unset, nothing is written at all.
+		static void LogStat(const std::string& event, const nlohmann::json& fields);
+
 		SessionServer(
 			std::string identity,
 			std::string sidecarHash,

@@ -296,6 +296,7 @@ namespace {
 
 	void ResetLobby(Lobby& l, ULONGLONG now) {
 		if (l.active) {
+			SessionServer::LogStat("lobby_released", { {"lobby", l.index} });
 			spdlog::info("lobby {} ({}) released", l.index, l.code);
 		}
 		l.active = false;
@@ -330,6 +331,7 @@ namespace {
 				ClearRelays(l);
 				l.server->SetSidecarHash(l.hash);
 				l.server->ResetLobby();
+				SessionServer::LogStat("lobby_created", { {"lobby", l.index} });
 				spdlog::info("lobby {} created: code {} session :{} relay :{} by {}",
 					l.index, l.code, l.sessionPort, l.relay.port, req.value("name", "?"));
 				return { {"ok", true}, {"code", l.code}, {"session_port", l.sessionPort} };
