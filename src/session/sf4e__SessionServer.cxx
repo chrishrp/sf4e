@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -755,6 +756,15 @@ void SessionServer::HandleResults(int loserIndex) {
 		SessionMember loser = clients.at(loserIndex);
 		clients.erase(clients.begin() + loserIndex);
 		clients.insert(clients.begin() + (nPlayers - 1), loser);
+
+		// The kept characters below are indexed by SIDE, so a player who
+		// changes seat has to take their character with them. Without this the
+		// array still describes the previous seating and the two players end up
+		// playing each other's character. Only a loser in seat 0 actually moves
+		// anyone: a loser already in the last seat is reinserted where it was.
+		if (nPlayers == 2 && loserIndex == 0) {
+			std::swap(_matchData.chara[0], _matchData.chara[1]);
+		}
 	}
 	for (auto iter = clients.begin(); iter != clients.end(); iter++) {
 		iter->data.watching = false;
