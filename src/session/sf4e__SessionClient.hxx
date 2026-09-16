@@ -23,6 +23,14 @@ namespace sf4e {
 		// match dropped, then clears it.
 		static bool bDesyncAbort;
 
+		// The session connection to the lobby server dropped (timeout, or the
+		// server went away). Set here, read and cleared by the lobby, which
+		// tells the player. This used to pop a modal MessageBox, which BLOCKED
+		// the game thread: the process stayed alive but froze and stopped
+		// logging until somebody clicked OK -- indistinguishable from a hang,
+		// and fatal to an unattended run.
+		static bool bConnectionLost;
+
 		enum ErrorType {
 			SCE_UNKNOWN,
 			SCE_JOIN_REJECTED_HASH_INVALID,

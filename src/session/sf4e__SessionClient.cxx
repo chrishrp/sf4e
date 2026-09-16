@@ -69,6 +69,7 @@ namespace {
 SessionClient* SessionClient::s_pCallbackInstance;
 bool SessionClient::bVerboseLogging = false;
 bool SessionClient::bDesyncAbort = false;
+bool SessionClient::bConnectionLost = false;
 
 SessionClient::SessionClient(
 	const Callbacks& callbacks,
@@ -431,15 +432,27 @@ void SessionClient::OnSteamNetConnectionStatusChanged(SteamNetConnectionStatusCh
 	case k_ESteamNetworkingConnectionState_ProblemDetectedLocally:
 	{
 		// Print an appropriate message
+		// NEVER pop a modal box here. MessageBoxA blocks the calling thread, so
+		// a single network blip froze the whole game: still running, still
+		// connected in Task Manager, but no rendering and no further log lines
+		// until someone clicked OK. That is what made lost sessions look like
+		// silent hangs, and it killed unattended runs outright (the process
+		// never dies, so a keepalive watchdog cannot help). Log it and let the
+		// lobby tell the player instead.
 		if (pInfo->m_eOldState == k_ESteamNetworkingConnectionState_Connecting)
 		{
-			spdlog::error("Client could not connect: {}", pInfo->m_info.m_szEndDebug);
-			MessageBoxA(NULL, "Client: could not connect- maybe wrong IP or no forwarding", NULL, MB_OK);
+			spdlog::error("Client could not connect ({}): {}",
+				pInfo->m_info.m_eEndReason, pInfo->m_info.m_szEndDebug);
+			SessionClient::bConnectionLost = true;
 		}
 		else if (pInfo->m_info.m_eState == k_ESteamNetworkingConnectionState_ProblemDetectedLocally)
 		{
-			spdlog::error("Client lost contact with host: {}", pInfo->m_info.m_szEndDebug);
-			MessageBoxA(NULL, "Client: Problem detected locally- lost contact with host", NULL, MB_OK);
+			// Reason 5003 is a plain timeout: we simply stopped hearing from
+			// the server. Logging the numeric reason distinguishes that from a
+			// refused connection or a bad address when reading a player's log.
+			spdlog::error("Client lost contact with host ({}): {}",
+				pInfo->m_info.m_eEndReason, pInfo->m_info.m_szEndDebug);
+			SessionClient::bConnectionLost = true;
 		}
 
 		// Clean up the connection.  This is important!

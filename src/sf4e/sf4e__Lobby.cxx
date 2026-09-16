@@ -1068,6 +1068,19 @@ void sf4e::Lobby::Draw() {
 		}
 	}
 
+	// The session to the lobby server dropped (usually a plain timeout, end
+	// reason 5003). Checked out here, NOT in the returning-from-battle block
+	// above: the connection is just as likely to drop while sitting in the
+	// lobby, and handling it only after a battle would leave the flag set and
+	// the player staring at a lobby that is quietly dead.
+	if (sf4e::SessionClient::bConnectionLost) {
+		sf4e::SessionClient::bConnectionLost = false;
+		g_hasResult = false;
+		g_screen = SC_LOBBY;
+		g_lobbyRow = 2;
+		Flash("Lost connection to the server. Create or join a lobby again.");
+	}
+
 	// Soak test: nobody is sitting at either PC, so ready up on our own and
 	// keep playing back-to-back matches forever. This covers the normal
 	// post-match result screen AND the "the match desynced" return, so a
