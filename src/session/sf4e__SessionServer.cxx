@@ -145,6 +145,16 @@ int SessionServer::PlayerCount() const {
 	return n;
 }
 
+std::vector<uint32_t> SessionServer::MemberIPv4s() const {
+	std::vector<uint32_t> out;
+	for (auto iter = clients.begin(); iter != clients.end(); iter++) {
+		if (iter->peerIPv4 != 0) {
+			out.push_back(iter->peerIPv4);
+		}
+	}
+	return out;
+}
+
 int SessionServer::SpectatorCount() const {
 	return (int)clients.size() - PlayerCount();
 }
@@ -665,6 +675,10 @@ SessionProtocol::JoinResult SessionServer::RegisterToWait(
 	}
 	SessionMember newMember;
 	newMember.conn = conn;
+	// Remembered privately (never broadcast) so the relay can reject anyone who
+	// is not actually in this lobby. IsIPv4() covers the IPv4-mapped form GNS
+	// hands back for a v4 peer.
+	newMember.peerIPv4 = peerAddr.IsIPv4() ? peerAddr.GetIPv4() : 0;
 	newMember.data.connId = cid;
 	newMember.data.name = name;
 	newMember.data.ip = peerAddrStr;

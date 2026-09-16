@@ -109,6 +109,23 @@ namespace {
 		Endpoint eps[MAX_PLAYERS_PER_LOBBY];
 		uint64_t packets = 0;
 
+		// Addresses allowed to claim a slot, host byte order, refreshed from
+		// the lobby's session members. Without this the relay hands a slot to
+		// the first two addresses that send it anything, so a stranger spraying
+		// the relay ports could take a player's place, break the match, or have
+		// their packets forwarded into the other player's GGPO. Empty means
+		// "nobody has joined yet", and nothing is accepted.
+		std::vector<uint32_t> allowed;
+		uint64_t rejected = 0;
+
+		bool IsAllowed(const sockaddr_in& from) const {
+			uint32_t ip = ntohl(from.sin_addr.s_addr);
+			for (size_t i = 0; i < allowed.size(); i++) {
+				if (allowed[i] == ip) return true;
+			}
+			return false;
+		}
+
 		bool Open(uint16_t p) {
 			port = p;
 			sock = OpenUdp(p);
@@ -139,6 +156,15 @@ namespace {
 					}
 				}
 				if (idx < 0) {
+					// Only someone who actually joined this lobby may take a
+					// slot. Rate-limited logging: a scan would otherwise fill
+					// the log faster than anything useful in it.
+					if (!IsAllowed(from)) {
+						if ((rejected++ % 500) == 0) {
+							spdlog::warn("relay :{} rejected {} (not a member of this lobby)", port, Describe(from));
+						}
+						continue;
+					}
 					for (int i = 0; i < MAX_PLAYERS_PER_LOBBY; i++) {
 						if (!eps[i].used) {
 							eps[i].used = true;
@@ -182,6 +208,17 @@ namespace {
 		uint16_t specPort = 0;
 		Relay::Endpoint host, spec;
 		uint64_t packets = 0;
+		// Same membership check as the relay; see Relay::allowed.
+		std::vector<uint32_t> allowed;
+		uint64_t rejected = 0;
+
+		bool IsAllowed(const sockaddr_in& from) const {
+			uint32_t ip = ntohl(from.sin_addr.s_addr);
+			for (size_t i = 0; i < allowed.size(); i++) {
+				if (allowed[i] == ip) return true;
+			}
+			return false;
+		}
 
 		bool Open(uint16_t hostSide, uint16_t specSide) {
 			hostPort = hostSide;
@@ -206,6 +243,15 @@ namespace {
 					break;
 				}
 				if (!sender.used || !SameEndpoint(sender.addr, from)) {
+					// This side re-learns on ANY new address, so without a check
+					// a single packet from a stranger would redirect a
+					// spectator feed mid-stream. Only lobby members qualify.
+					if (!IsAllowed(from)) {
+						if ((rejected++ % 500) == 0) {
+							spdlog::warn("pipe :{} rejected {} (not a member of this lobby)", port, Describe(from));
+						}
+						continue;
+					}
 					sender.used = true;
 					sender.addr = from;
 					spdlog::info("pipe :{} learned {} at {}", port, who, Describe(from));
@@ -456,6 +502,17 @@ int main(int argc, char** argv) {
 		for (auto& l : g_lobbies) {
 			l.server->PrepareForCallbacks();
 			l.server->Step();
+
+			// Refresh who is allowed to use this lobby's relay before pumping
+			// it. Taken from the session members, which is the only place we
+			// actually know a player is who they say they are: they had to look
+			// the lobby code up and complete a session handshake to get here.
+			std::vector<uint32_t> members = l.server->MemberIPv4s();
+			l.relay.allowed = members;
+			for (int k = 0; k < MAX_SPECTATORS_PER_LOBBY; k++) {
+				l.pipes[k].allowed = members;
+			}
+
 			l.relay.Pump(now);
 			for (int k = 0; k < MAX_SPECTATORS_PER_LOBBY; k++) {
 				l.pipes[k].Pump(now);

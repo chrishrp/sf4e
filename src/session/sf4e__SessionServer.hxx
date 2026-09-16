@@ -86,6 +86,11 @@ namespace sf4e {
 		// variable; if that is unset, nothing is written at all.
 		static void LogStat(const std::string& event, const nlohmann::json& fields);
 
+		// The addresses currently in this lobby, host byte order. The relay
+		// only learns endpoints from these, so a stranger spraying the relay
+		// ports cannot take a player's slot or inject packets into the match.
+		std::vector<uint32_t> MemberIPv4s() const;
+
 		SessionServer(
 			std::string identity,
 			std::string sidecarHash,
@@ -124,6 +129,11 @@ namespace sf4e {
 			SessionProtocol::MemberData data;
 			HSteamNetConnection conn;
 			int spectatorSlot = -1;
+			// The address this member's session actually came from, kept out of
+			// `data` so it is never broadcast to the other members. The relay
+			// uses it to refuse traffic from anyone who is not in this lobby.
+			// Host byte order; 0 if unknown.
+			uint32_t peerIPv4 = 0;
 		} SessionMember;
 
 		std::map<HSteamNetConnection, SessionProtocol::ConnectionID> cidMap;
