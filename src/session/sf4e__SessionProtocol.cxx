@@ -1,4 +1,5 @@
 #include <cstdio>
+#include <cstring>
 #include <string>
 
 // The chara-conditions type comes from the header, which aliases the game's
@@ -40,7 +41,9 @@ namespace sf4e {
 			readyMessageNum[1] = -1;
 			stageID = -1;
 			rngSeed = 0xffffffff;
-			memset(chara, 0, sizeof(Dimps::GameEvents::VsMode::ConfirmedCharaConditions) * 2);
+			// sizeof the array itself: the element type is the game type on Windows and
+			// a layout-compatible copy elsewhere, so naming it here would not port.
+			memset(chara, 0, sizeof(chara));
 		}
 
 		bool MatchData::IsAllReady() {

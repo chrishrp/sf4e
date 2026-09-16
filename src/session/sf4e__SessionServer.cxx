@@ -86,7 +86,9 @@ void SessionServer::AddConnection(HSteamNetConnection newConn) {
 	// function pointer directly. The failure mode if you pass the function
 	// pointer directly is _extremely_ confusing- it just appears to be
 	// a segfault in the GNS callback loop.
-	void* callback = SteamNetConnectionStatusChangedCallback;
+	// Explicit cast: converting a function pointer to void* is a GCC error
+	// without it. GNS wants a pointer TO the function pointer (see above).
+	void* callback = (void*)SteamNetConnectionStatusChangedCallback;
 	SteamNetworkingUtils()->SetConfigValue(
 		k_ESteamNetworkingConfig_Callback_ConnectionStatusChanged,
 		k_ESteamNetworkingConfig_Connection,
