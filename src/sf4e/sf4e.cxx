@@ -20,11 +20,14 @@ std::string sf4e::sidecarHash;
 sf4e::Args sf4e::args;
 HANDLE sf4e::hSyncEvent;
 
-// TESTER DIAGNOSTIC BUILD: automation OFF so a human plays normally, logging ON
-// so a real desync is captured. Set bSoakTest=true (and rebuild) for the
-// unattended two-PC soak instead. Both must be false for a public release.
+// RELEASE BUILD: both off.
+//   bSoakTest     -- unattended two-PC soak (random inputs, auto-rematch). It
+//                    overrides the pad, so it must never ship to a player.
+//   bDiagLogging  -- battle-flow tracing and the GameManager probe. Off here to
+//                    keep player logs readable; the desync reporting players
+//                    actually need ("State divergence ... ") is NOT gated by it.
 bool sf4e::bSoakTest = false;
-bool sf4e::bDiagLogging = true;
+bool sf4e::bDiagLogging = false;
 
 using rIEmSpriteAction = Dimps::Eva::IEmSpriteAction;
 using rIEmSpriteNode = Dimps::Eva::IEmSpriteNode;
