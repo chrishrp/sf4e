@@ -10,15 +10,25 @@
 #include <spdlog/spdlog.h>
 #include <GameNetworkingSockets/steam/steamnetworkingsockets.h>
 #include <GameNetworkingSockets/steam/isteamnetworkingutils.h>
+// Unused here, and GGPO is a Windows-side dependency the server does not have.
+#ifdef _WIN32
 #include <ggponet.h>
+#endif
 
+// FixedPoint is the only thing this file actually uses out of Dimps, and that
+// header is portable.
+#include "../Dimps/Dimps__Math.hxx"
+
+// The rest are game-side and unused here: they reach <windows.h>, <d3d9.h> and
+// GGPO, none of which exist on the Linux server.
+#ifdef _WIN32
 #include "../Dimps/Dimps.hxx"
 #include "../Dimps/Dimps__Event.hxx"
 #include "../Dimps/Dimps__GameEvents.hxx"
-#include "../Dimps/Dimps__Math.hxx"
 #include "../Dimps/Dimps__Pad.hxx"
 #include "../sf4e/sf4e__Game__Battle__System.hxx"
 #include "../sf4e/sf4e__GameEvents.hxx"
+#endif
 
 #include "sf4e__SessionProtocol.hxx"
 #include "sf4e__SessionServer.hxx"

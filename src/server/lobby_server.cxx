@@ -125,7 +125,7 @@ namespace {
 			char buf[2048];
 			for (;;) {
 				sockaddr_in from = { 0 };
-				int fromLen = sizeof(from);
+				socklen_t fromLen = sizeof(from);   // POSIX wants socklen_t; Winsock defines it too
 				int n = recvfrom(sock, buf, sizeof(buf), 0, (sockaddr*)&from, &fromLen);
 				if (n <= 0) {
 					break;
@@ -200,7 +200,7 @@ namespace {
 			char buf[2048];
 			for (;;) {
 				sockaddr_in from = { 0 };
-				int fromLen = sizeof(from);
+				socklen_t fromLen = sizeof(from);   // POSIX wants socklen_t; Winsock defines it too
 				int n = recvfrom(in, buf, sizeof(buf), 0, (sockaddr*)&from, &fromLen);
 				if (n <= 0) {
 					break;
@@ -432,7 +432,7 @@ int main(int argc, char** argv) {
 		for (;;) {
 			char buf[1500];
 			sockaddr_in from = { 0 };
-			int fromLen = sizeof(from);
+			socklen_t fromLen = sizeof(from);   // POSIX wants socklen_t; Winsock defines it too
 			int n = recvfrom(matchmaker, buf, sizeof(buf) - 1, 0, (sockaddr*)&from, &fromLen);
 			if (n <= 0) {
 				break;

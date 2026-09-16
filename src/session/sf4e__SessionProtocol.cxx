@@ -1,10 +1,10 @@
 #include <cstdio>
 #include <string>
 
-#include <cstdio>
-#include <string>
-
-#include "../Dimps/Dimps__GameEvents.hxx"
+// The chara-conditions type comes from the header, which aliases the game's
+// own type on Windows and declares a layout-compatible copy elsewhere. Pulling
+// Dimps__GameEvents.hxx in here as well would drag <windows.h> (and, through
+// Dimps__Platform.hxx, <d3d9.h>) into the Linux server build.
 #include "sf4e__SessionProtocol.hxx"
 
 namespace sf4e {
