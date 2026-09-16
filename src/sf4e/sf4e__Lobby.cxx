@@ -88,7 +88,71 @@ namespace {
 	uint16_t g_localGgpoPort = 23457;
 
 	int g_homeCursor = 0;
-	const int HOME_ITEMS = 4;
+	const int HOME_ITEMS = 5;
+
+	// Selectable lobby servers. The launcher hands us either a single address
+	// (from --server or server.txt) or a baked "Name=addr;Name=addr" list, so a
+	// player can pick the region closest to them. Both players must be on the
+	// SAME one: lobby codes live on a particular server, and all match traffic
+	// relays through it.
+	struct ServerEntry {
+		std::string name;
+		std::string addr;
+	};
+	std::vector<ServerEntry> g_servers;
+	int g_serverIdx = 0;
+
+	void ParseServerList(const char* spec) {
+		g_servers.clear();
+		g_serverIdx = 0;
+		if (spec == nullptr || spec[0] == 0) return;
+		std::string s(spec);
+		size_t start = 0;
+		while (start <= s.size()) {
+			size_t sep = s.find(';', start);
+			std::string item = s.substr(start, sep == std::string::npos ? std::string::npos : sep - start);
+			if (!item.empty()) {
+				size_t eq = item.find('=');
+				ServerEntry e;
+				if (eq == std::string::npos) {
+					// A plain address, e.g. from server.txt: no name to show.
+					e.name = "SERVER";
+					e.addr = item;
+				}
+				else {
+					e.name = item.substr(0, eq);
+					e.addr = item.substr(eq + 1);
+				}
+				if (!e.addr.empty()) g_servers.push_back(e);
+			}
+			if (sep == std::string::npos) break;
+			start = sep + 1;
+		}
+	}
+
+	// A little flag drawn from rectangles. The UI font has no emoji, and
+	// bundling flag images would mean shipping artwork, so the two we actually
+	// host are drawn by hand and anything else gets a neutral marker.
+	void DrawFlag(ImDrawList* dl, ImVec2 a, float w, float h, const std::string& name) {
+		std::string n;
+		for (char c : name) n += (char)tolower((unsigned char)c);
+		ImU32 edge = IM_COL32(0, 0, 0, 160);
+		if (n.find("spain") != std::string::npos || n.find("espa") != std::string::npos) {
+			ImU32 red = IM_COL32(198, 11, 30, 255), yellow = IM_COL32(255, 196, 0, 255);
+			dl->AddRectFilled(a, ImVec2(a.x + w, a.y + h * 0.25f), red);
+			dl->AddRectFilled(ImVec2(a.x, a.y + h * 0.25f), ImVec2(a.x + w, a.y + h * 0.75f), yellow);
+			dl->AddRectFilled(ImVec2(a.x, a.y + h * 0.75f), ImVec2(a.x + w, a.y + h), red);
+		}
+		else if (n.find("german") != std::string::npos || n.find("deutsch") != std::string::npos) {
+			dl->AddRectFilled(a, ImVec2(a.x + w, a.y + h / 3), IM_COL32(0, 0, 0, 255));
+			dl->AddRectFilled(ImVec2(a.x, a.y + h / 3), ImVec2(a.x + w, a.y + h * 2 / 3), IM_COL32(221, 0, 0, 255));
+			dl->AddRectFilled(ImVec2(a.x, a.y + h * 2 / 3), ImVec2(a.x + w, a.y + h), IM_COL32(255, 206, 0, 255));
+		}
+		else {
+			dl->AddRectFilled(a, ImVec2(a.x + w, a.y + h), IM_COL32(120, 120, 120, 255));
+		}
+		dl->AddRect(a, ImVec2(a.x + w, a.y + h), edge, 0, 0, 1.5f);
+	}
 
 	std::string g_code;
 	int g_joinCursor = 0;
@@ -347,7 +411,8 @@ namespace {
 			DWORD len = sizeof(g_name);
 			if (!GetUserNameA(g_name, &len)) strcpy_s(g_name, "Player");
 		}
-		if (sf4e::args.szServer[0] != 0) g_mm.Configure(sf4e::args.szServer);
+		ParseServerList(sf4e::args.szServer);
+		if (!g_servers.empty()) g_mm.Configure(g_servers[g_serverIdx].addr.c_str());
 		spdlog::info("Lobby: playing as {} ({})", g_name, sf4e::args.szName[0] ? "Steam persona" : "Windows user name");
 	}
 
@@ -539,20 +604,55 @@ namespace {
 
 		char delayLabel[32];
 		snprintf(delayLabel, sizeof(delayLabel), "INPUT DELAY   <  %d  >", g_delay);
-		const char* items[HOME_ITEMS] = { "CREATE LOBBY", "JOIN WITH CODE", delayLabel, "BACK TO GAME" };
+		char serverLabel[64];
+		if (g_servers.size() > 1) {
+			snprintf(serverLabel, sizeof(serverLabel), "SERVER   <  %s  >", g_servers[g_serverIdx].name.c_str());
+		}
+		else if (g_servers.size() == 1) {
+			snprintf(serverLabel, sizeof(serverLabel), "SERVER      %s", g_servers[0].name.c_str());
+		}
+		else {
+			snprintf(serverLabel, sizeof(serverLabel), "SERVER      none");
+		}
+		const char* items[HOME_ITEMS] = { "CREATE LOBBY", "JOIN WITH CODE", serverLabel, delayLabel, "BACK TO GAME" };
 		float y = ds.y * 0.36f;
 		for (int i = 0; i < HOME_ITEMS; i++) {
 			bool sel = i == g_homeCursor;
 			if (sel) Slant(dl, ImVec2(40, y - 6), ImVec2(560, y + 52), RED);
 			TextOutlined(dl, g_fontHead, 40, ImVec2(80, y), items[i], sel ? PAPER : PAPER_DIM);
+			// Flag beside the server row, so the region is readable at a glance.
+			if (i == 2 && !g_servers.empty()) {
+				float tw = TextSize(g_fontHead, 40, items[i]).x;
+				DrawFlag(dl, ImVec2(80 + tw + 18, y + 8), 38, 26, g_servers[g_serverIdx].name);
+			}
 			y += 74;
 		}
+		// Both players must pick the same one, or their codes will not be found.
+		if (g_servers.size() > 1) {
+			dl->AddText(g_fontSmall, 20, ImVec2(80, y - 16), PAPER_DIM,
+				"Both players must choose the SAME server.");
+		}
 		dl->AddText(g_fontSmall, 20, ImVec2(80, y + 10), PAPER_DIM, ("Playing as " + std::string(g_name)).c_str());
-		DrawHint(dl, ds, "Up/Down: choose     A: confirm     Left/Right: change delay     B: back to game");
+		DrawHint(dl, ds, "Up/Down: choose     A: confirm     Left/Right: change server | delay     B: back to game");
 
 		if (in.up) g_homeCursor = (g_homeCursor + HOME_ITEMS - 1) % HOME_ITEMS;
 		if (in.down) g_homeCursor = (g_homeCursor + 1) % HOME_ITEMS;
-		if (g_homeCursor == 2) {
+		// Row 2 switches server, row 3 the input delay.
+		if (g_homeCursor == 2 && g_servers.size() > 1) {
+			int prev = g_serverIdx;
+			if (in.left)  g_serverIdx = (g_serverIdx + (int)g_servers.size() - 1) % (int)g_servers.size();
+			if (in.right) g_serverIdx = (g_serverIdx + 1) % (int)g_servers.size();
+			if (g_serverIdx != prev) {
+				// Re-point the matchmaker and re-test it: the status shown is
+				// per server, so it must not carry over from the previous one.
+				g_mm.Cancel();
+				g_pingInFlight = false;
+				g_serverStatus = -1;
+				g_mm.Configure(g_servers[g_serverIdx].addr.c_str());
+				spdlog::info("Lobby: server switched to {}", g_servers[g_serverIdx].name);
+			}
+		}
+		if (g_homeCursor == 3) {
 			if (in.left && g_delay > 0) g_delay--;
 			if (in.right && g_delay < 8) g_delay++;
 		}
@@ -561,6 +661,7 @@ namespace {
 			switch (g_homeCursor) {
 			case 0:
 				if (!g_mm.IsConfigured()) { Flash("No lobby server configured"); break; }
+				if (g_serverStatus == 0) { Flash("That server is unreachable. Try the other one."); break; }
 				g_isCreator = true;
 				g_spectate = false;
 				g_mm.Create(sf4e::sidecarHash, g_name);
@@ -570,7 +671,7 @@ namespace {
 				g_code.clear(); g_joinCursor = 0; g_isCreator = false;
 				g_screen = SC_JOIN;
 				break;
-			case 3:
+			case 4:
 				sf4e::Lobby::Close();
 				break;
 			}
