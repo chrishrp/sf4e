@@ -27,7 +27,15 @@ fi
 
 echo "==> Installing binary to /opt/sf4e"
 sudo mkdir -p /opt/sf4e/lib
-sudo cp "$binary" /opt/sf4e/LobbyServer
+
+# Copy to a temporary name and rename into place. Writing directly over a
+# RUNNING executable fails with ETXTBSY ("Text file busy"), and because that is
+# just a failed cp the service happily carries on with the OLD binary -- an
+# upgrade that looks like it worked but silently changed nothing. rename(2) has
+# no such restriction: the running process keeps the old inode and the next
+# start picks up the new one.
+sudo cp "$binary" /opt/sf4e/LobbyServer.new
+sudo mv -f /opt/sf4e/LobbyServer.new /opt/sf4e/LobbyServer
 
 # Ship the shared libraries too. The binary's RPATH points into the build tree
 # under the building user's home, which the unprivileged service account cannot
