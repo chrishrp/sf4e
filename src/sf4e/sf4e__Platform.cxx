@@ -167,6 +167,9 @@ int fMain::Initialize(void* a, void* b, void* c) {
             spdlog::set_default_logger(logger);
             spdlog::flush_every(std::chrono::seconds(1));
             spdlog::info("Welcome to sf4e");
+            if (sf4e::bSoakTest) {
+                spdlog::warn("=== SOAK TEST BUILD: automated endless matches, extra diagnostics. Not for normal play. ===");
+            }
         }
         catch (const spdlog::spdlog_ex& ex)
         {

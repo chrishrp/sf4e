@@ -107,6 +107,9 @@ namespace {
 	rVsMode::ConfirmedCharaConditions g_cond = { 0, 0, 0, 0, 0, 0, 0, 0, (BYTE)rBattle::ED_USF4 };
 	int g_stage = 0;
 	bool g_sentReady = false;
+	// Soak test: earliest tick at which the automatic ready-up may fire, used to
+	// let the server settle the previous match's result first.
+	DWORD g_soakReadyAfter = 0;
 	bool g_reportedLastMatch = false;
 	bool g_isCreator = false;
 	bool g_spectate = false;   // joined to watch, not to play
@@ -1030,6 +1033,13 @@ void sf4e::Lobby::Draw() {
 		g_hiddenForBattle = false;
 		SetSuppress(true);
 		g_sentReady = false;
+		// Soak: do not ready up the instant we land back in the lobby. The
+		// server still has to process the result report and reset both sides'
+		// readiness; readying into that window races it and can leave one PC
+		// starting a match while the other sits in the lobby (a black screen,
+		// seen after a draw). A human takes seconds to press a button; give the
+		// same grace here.
+		g_soakReadyAfter = GetTickCount() + 4000;
 		g_lobbyRow = 0;
 		g_prevPad = 0xffff;
 
@@ -1055,6 +1065,27 @@ void sf4e::Lobby::Draw() {
 			g_screen = SC_LOBBY;
 			g_lobbyRow = 2;
 			Flash("The match desynced and had to stop. Ready up to try again.");
+		}
+	}
+
+	// Soak test: nobody is sitting at either PC, so ready up on our own and
+	// keep playing back-to-back matches forever. This covers the normal
+	// post-match result screen AND the "the match desynced" return, so a
+	// desync never stops the run -- it is logged and the next match starts.
+	if (sf4e::bSoakTest && fUserApp::netplay && !g_sentReady) {
+		sf4e::SessionClient& sc = fUserApp::netplay->client;
+		// Throttled: SendReady can fail (e.g. the character message does not
+		// get through), and retrying every frame would flash an error forever.
+		// Once a second is plenty to keep an unattended run rolling.
+		static DWORD lastTry = 0;
+		DWORD now = GetTickCount();
+		if (!sc._lobbyData.members.empty() && (int)(now - g_soakReadyAfter) >= 0 &&
+			(now - lastTry) > 1000) {
+			lastTry = now;
+			SendReady();
+			g_screen = SC_LOBBY;
+			g_lobbyRow = 2;
+			g_actionCursor = 0;
 		}
 	}
 

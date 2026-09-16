@@ -203,6 +203,13 @@ namespace sf4e {
 				// the default; the flag remains for A/B measurement.
 				static bool bRestoreGfxLast;
 
+				// True only while GGPO is re-simulating rolled-back frames.
+				// The soak-test flow logger reports it, so we can see whether a
+				// round/match transition was decided during a rollback -- the
+				// suspected trigger for the two machines taking different
+				// branches at a round end.
+				static bool bInRollback;
+
 				struct StateSnapshotMeta {
 					bool sent;
 					bool confirmed;

@@ -28,6 +28,12 @@ namespace sf4e {
 	extern Args args;
 	extern HANDLE hSyncEvent;
 
+	// Unattended soak-test build: plays endless automated matches (random
+	// local inputs + auto-rematch, no human at either PC) and turns on the
+	// round-transition diagnostics, so a rare KO/round-end desync can be
+	// reproduced and localised overnight. Never enabled in a normal release.
+	extern bool bSoakTest;
+
 	void Install(HINSTANCE hinstDll, const Payload* const payload);
 
 	namespace Eva {

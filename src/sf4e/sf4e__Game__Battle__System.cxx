@@ -127,6 +127,7 @@ bool fSystem::extendedSaveRequest = false;
 bool fSystem::idempotenceCheckRequest = false;
 bool fSystem::bSkipResetAfterMemento = false;
 bool fSystem::bRestoreGfxLast = true;
+bool fSystem::bInRollback = false;
 
 // Set while a deferred Scaleform restore is outstanding. Points into the
 // memento being restored, which stays alive for the whole restore.
@@ -328,6 +329,84 @@ static bool AdvanceSpectatorFrame(rSystem* _this) {
     return true;
 }
 
+// Soak watchdog state: when the current match was asked to start, and whether
+// it ever reached GGPO_EVENTCODE_RUNNING. A rematch can stall with one side in
+// the match and the other still sitting in the lobby (seen after a draw), which
+// leaves a black screen and ends an unattended run. See the watchdog in
+// BattleUpdate.
+static DWORD g_ggpoStartTick = 0;
+static bool g_ggpoReachedRunning = false;
+static void AbortMatchStart(const char* why);   // defined with StartGGPO below
+
+static const char* BattleFlowName(DWORD f) {
+    switch (f) {
+    case rSystem::BF__START_DEMO: return "START_DEMO";
+    case rSystem::BF__READY: return "READY";
+    case rSystem::BF__FIGHT: return "FIGHT";
+    case rSystem::BF__FINISH: return "FINISH";
+    case rSystem::BF__ROUND_RESULT: return "ROUND_RESULT";
+    case rSystem::BF__MATCH_RESULT: return "MATCH_RESULT";
+    case rSystem::BF__DRAW_RESULT: return "DRAW_RESULT";
+    case rSystem::BF__BONUS_RESULT: return "BONUS_RESULT";
+    case rSystem::BF__CONTINUE: return "CONTINUE";
+    case rSystem::BF__GAME_OVER: return "GAME_OVER";
+    case rSystem::BF__BTL_START: return "BTL_START";
+    case rSystem::BF__BTL_OVER: return "BTL_OVER";
+    case rSystem::BF__MATCH_START: return "MATCH_START";
+    case rSystem::BF__MATCH_OVER: return "MATCH_OVER";
+    case rSystem::BF__ROUND_START: return "ROUND_START";
+    case rSystem::BF__ROUND_OVER: return "ROUND_OVER";
+    case rSystem::BF__IDLE: return "IDLE";
+    case rSystem::BF__RESTART: return "RESTART";
+    default:               return "?";
+    }
+}
+
+// Soak-test diagnostic. The round-end desync shows up as the two machines
+// taking DIFFERENT branches out of a round: one goes ROUND_RESULT ->
+// ROUND_START -> FIGHT (another round) while the other goes ROUND_RESULT ->
+// MATCH_RESULT (match over). Logging every transition with the frame, both
+// players' vitality, and whether we were inside a rollback re-simulation makes
+// that fork obvious when the two PCs' logs are compared side by side -- and
+// shows whether the deciding transition happened during a rollback.
+// Called from both the normal frame path and the rollback re-sim path.
+static void LogFlowTransition(rSystem* sys) {
+    if (!sf4e::bSoakTest || fSystem::ggpo == nullptr) {
+        return;
+    }
+    static DWORD lastFlow = 0xffffffff;
+    static DWORD lastSub = 0xffffffff;
+    DWORD flow = *rSystem::staticVars.CurrentBattleFlow;
+    DWORD sub = *rSystem::staticVars.CurrentBattleFlowSubstate;
+    if (flow == lastFlow && sub == lastSub) {
+        return;
+    }
+    DWORD prevFlow = lastFlow;
+    DWORD prevSub = lastSub;
+    lastFlow = flow;
+    lastSub = sub;
+
+    int frame = rSystem::GetNumFramesSimulated_FixedPoint(sys)->integral;
+    FixedPoint vit[2] = { { 0, 0 }, { 0, 0 } };
+    CharaUnit* unit = (sys->*rSystem::publicMethods.GetCharaUnit)();
+    if (unit != nullptr) {
+        for (int i = 0; i < 2; i++) {
+            CharaActor* a = (unit->*CharaUnit::publicMethods.GetActorByIndex)(i);
+            if (a != nullptr) {
+                (a->*CharaActor::publicMethods.GetVitalityAmt_FixedPoint)(&vit[i]);
+            }
+        }
+    }
+    spdlog::info(
+        "FLOW f{} {}({}).{} -> {}({}).{}  vit P1={} P2={}  {}",
+        frame,
+        BattleFlowName(prevFlow), prevFlow, prevSub,
+        BattleFlowName(flow), flow, sub,
+        vit[0].integral, vit[1].integral,
+        fSystem::bInRollback ? "DURING-ROLLBACK" : "live"
+    );
+}
+
 void fSystem::BattleUpdate() {
     rSystem* _this = (rSystem*)this;
     rSystem::__publicMethods& sysMethods = rSystem::publicMethods;
@@ -336,6 +415,18 @@ void fSystem::BattleUpdate() {
     static int nLastRandomInputFrame = -1;
     static fPadSystem::Inputs randomInputs[2] = { { 0, 0 }, { 0, 0 } };
 
+    // Soak watchdog. A rematch can stall with this side in the match while the
+    // peer is still in the lobby (reproduced after a draw): GGPO never reaches
+    // RUNNING, the screen stays black and an unattended run dies there. Bail
+    // back to the lobby so the auto-ready starts a fresh match instead. Checked
+    // before the bUpdateAllowed bail-out, because a stalled match is exactly
+    // the case where the update is not allowed to proceed.
+    if (sf4e::bSoakTest && ggpo != nullptr && !g_ggpoReachedRunning &&
+        g_ggpoStartTick != 0 && (GetTickCount() - g_ggpoStartTick) > 30000) {
+        g_ggpoStartTick = 0;
+        AbortMatchStart("soak watchdog: GGPO never reached RUNNING (peer never joined)");
+    }
+
     if (!bUpdateAllowed) {
         return;
     }
@@ -343,6 +434,9 @@ void fSystem::BattleUpdate() {
     // Pin the FP mode before this frame is simulated, so a later rollback of
     // this frame re-simulates under the identical mode. See EnforceSimFpControl.
     EnforceSimFpControl();
+
+    // Soak test: report any battle-flow change the previous frame produced.
+    LogFlowTransition(_this);
 
     if (ggpo && nFramesToSkip > 0) {
         // Honour a time-sync request: hold the simulation this frame while
@@ -356,12 +450,34 @@ void fSystem::BattleUpdate() {
         if (localPlayerHandle != GGPO_INVALID_HANDLE) {
             if (nRandomizeLocalInputsEveryXFramesInGGPO != 0) {
                 int currentFrame = rSystem::GetNumFramesSimulated_FixedPoint(_this)->integral;
+                // The frame counter restarts at 0 on every new match while
+                // nLastRandomInputFrame is a static that survives it, so the
+                // difference goes negative and, without the `delta < 0` case
+                // below, the inputs would freeze on their last value forever --
+                // both characters standing still for the rest of the run. That
+                // is exactly what limited earlier soaks to a single KO followed
+                // by nothing but time-overs.
+                int delta = currentFrame - nLastRandomInputFrame;
                 if (
                     nLastRandomInputFrame < 0 ||
-                    (currentFrame - nLastRandomInputFrame) > nRandomizeLocalInputsEveryXFramesInGGPO
+                    delta < 0 ||
+                    delta > nRandomizeLocalInputsEveryXFramesInGGPO
                 ) {
-                    randomInputs[0] = { localRand(), localRand() };
-                    randomInputs[1] = { localRand(), localRand() };
+                    // One (occasionally two) random button rather than a full
+                    // random 32-bit mask. Mashing every bit at once holds all
+                    // directions and all attacks simultaneously, which nets out
+                    // to standing and blocking -- measured: the soak produced
+                    // nothing but 1000-vs-1000 time-overs. Pressing one button
+                    // at a time actually walks and swings, which is what
+                    // produces the KOs the round-end desync needs. Low bits
+                    // only, to stay clear of system buttons like start.
+                    for (int s = 0; s < 2; s++) {
+                        uint32_t bits = 1u << (localRand() % 14);
+                        if ((localRand() & 3) == 0) {
+                            bits |= 1u << (localRand() % 14);
+                        }
+                        randomInputs[s] = { bits, bits };
+                    }
                     nLastRandomInputFrame = currentFrame;
                 }
             }
@@ -728,6 +844,17 @@ void fSystem::StartGGPO(GGPOPlayer* inPlayers, int numPlayers, int port, int fra
     // Re-capture the simulation FP mode fresh for this match.
     g_fpLogged = false;   // log the machine's FP word once per match
 
+    // Soak test: nobody is sitting at either PC, so drive the local side with
+    // random inputs. Standing still would only ever produce time-overs; we need
+    // real damage and KOs, because the desync we are hunting happens at the
+    // round/match-ending knockout.
+    if (sf4e::bSoakTest) {
+        nRandomizeLocalInputsEveryXFramesInGGPO = 8;
+        g_ggpoStartTick = GetTickCount();
+        g_ggpoReachedRunning = false;
+        spdlog::info("SOAK TEST: random local inputs every {} frames", nRandomizeLocalInputsEveryXFramesInGGPO);
+    }
+
     // A match needs exactly two players in slots 1 and 2. On a poor connection
     // the lobby data can be momentarily incomplete when the match fires, and a
     // half-built player list makes ggpo_add_player fail ("could not add
@@ -878,7 +1005,31 @@ bool fSystem::ggpo_advance_frame_callback(int)
     // if it called fSystem::BattleUpdate, it'd be restricted to the same
     // update-halting that the detoured method is.
     rSystem* system = rSystem::staticMethods.GetSingleton();
+    if (system == nullptr) {
+        // The battle system is gone: the peer dropped and the match is tearing
+        // down, or it never finished loading. GGPO still calls this back, and
+        // calling BattleUpdate through a null system makes the GAME dereference
+        // address 0 -- the "access violation ... reading address 0x00000000 at
+        // SSFIV.exe+0x1633b0" crash seen whenever a new match was started after
+        // a peer vanished. Keep GGPO's frame count consistent and get out
+        // instead; the session is already on its way down.
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            spdlog::error("GGPO advance callback with no battle system; skipping frame (match is tearing down)");
+        }
+        ggpo_advance_frame(ggpo);
+        fPadSystem::playbackFrame = -1;
+        return true;
+    }
+    // This callback only ever runs while GGPO re-simulates rolled-back frames,
+    // so it is exactly the window the soak-test flow logger wants to flag.
+    bInRollback = true;
     (system->*rSystem::publicMethods.BattleUpdate)();
+    // Log while still flagged, so a transition decided during a rollback
+    // re-simulation is reported as such.
+    LogFlowTransition(system);
+    bInRollback = false;
 
     result = ggpo_advance_frame(ggpo);
     if (!GGPO_SUCCEEDED(result)) {
@@ -894,6 +1045,17 @@ bool fSystem::ggpo_advance_frame_callback(int)
 
 bool fSystem::ggpo_load_game_state_callback(unsigned char* buffer, int len)
 {
+    // Same guard as the advance callback: restoring walks the battle system and
+    // its GameManager, so with the system gone this dereferences null and takes
+    // the process down mid-teardown.
+    if (buffer == nullptr || rSystem::staticMethods.GetSingleton() == nullptr) {
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            spdlog::error("GGPO load-state callback with no battle system; skipping restore (match is tearing down)");
+        }
+        return true;
+    }
     SaveState* state = (SaveState*)buffer;
     SaveState::Load(state);
     return true;
@@ -907,6 +1069,19 @@ bool fSystem::ggpo_save_game_state_callback(unsigned char** buffer, int* len, in
     // utilization of _GGPO_ is technically zero- but GGPO
     // errors with an assertion if the length is zero.
     *len = 1;
+
+    // Saving reads the battle system and its GameManager, so with the system
+    // gone (peer dropped, match tearing down) this would dereference null the
+    // same way the advance callback did.
+    if (rSystem::staticMethods.GetSingleton() == nullptr) {
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            spdlog::error("GGPO save-state callback with no battle system; skipping save (match is tearing down)");
+        }
+        *buffer = nullptr;
+        return false;
+    }
 
     // Find an empty position in our array, and store if we can
     // find one.
@@ -961,6 +1136,7 @@ bool fSystem::ggpo_on_event_callback(GGPOEvent* info) {
         spdlog::info("GGPO: Synchronized with peer");
         break;
     case GGPO_EVENTCODE_RUNNING:
+        g_ggpoReachedRunning = true;   // soak watchdog: the match really started
         bUpdateAllowed = true;
         spdlog::info("GGPO: Running");
         break;
@@ -1022,6 +1198,58 @@ void fSystem::BuildSnapshot(rSystem* src, StateSnapshot& snapshot) {
     snapshot.frameIdx = rSystem::GetNumFramesSimulated_FixedPoint(src)->integral;
     snapshot.battleFlow = (int)*rSystem::staticVars.CurrentBattleFlow;
     snapshot.battleFlowSubstate = (int)*rSystem::staticVars.CurrentBattleFlowSubstate;
+
+    // Soak-test diagnostic: chunk-checksum the GameManager so the two machines
+    // compare their round/match bookkeeping every snapshot. We deliberately
+    // sample PAST the 0x49c the save state copies: a divergence at an offset
+    // >= that is proof the round state we fail to save is what forks a
+    // round-end. Bounded by VirtualQuery so reading past the object can never
+    // fault.
+    if (sf4e::bSoakTest) {
+        const uint8_t* gm = (const uint8_t*)(src->*rSystem::publicMethods.GetGameManager)();
+        MEMORY_BASIC_INFORMATION mbi = { 0 };
+        size_t readable = 0;
+        if (gm != nullptr &&
+            VirtualQuery(gm, &mbi, sizeof(mbi)) == sizeof(mbi) &&
+            mbi.State == MEM_COMMIT &&
+            !(mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD))) {
+            readable = (size_t)(((const uint8_t*)mbi.BaseAddress + mbi.RegionSize) - gm);
+        }
+        // All-or-nothing: a partial fill would leave trailing zeros here and
+        // real checksums on the other machine, which would read as a fake
+        // divergence. Either both sides probe the same span or we probe none.
+        if (readable >= SessionProtocol::GM_PROBE_BYTES) {
+            // Mask anything that looks like an address before hashing. The
+            // GameManager is full of heap pointers, which differ between two
+            // machines by nature and would report a divergence every single
+            // snapshot, burying the signal we actually want. Masking by VALUE
+            // RANGE (not by querying this machine's heap) is what keeps the two
+            // machines consistent: the same field is a pointer at the same
+            // offset on both, so both mask the same words. Small integers --
+            // round counters, timers, the state we are actually hunting -- fall
+            // below the range and are still compared exactly.
+            const size_t words = SessionProtocol::GM_CHUNK_BYTES / sizeof(uint32_t);
+            for (size_t c = 0; c < SessionProtocol::GM_MAX_CHUNKS; c++) {
+                const uint32_t* src32 =
+                    (const uint32_t*)(gm + c * SessionProtocol::GM_CHUNK_BYTES);
+                uint32_t masked[SessionProtocol::GM_CHUNK_BYTES / sizeof(uint32_t)];
+                for (size_t w = 0; w < words; w++) {
+                    uint32_t v = src32[w];
+                    masked[w] = (v >= 0x00010000u && v <= 0x7fffffffu) ? 0xaaaaaaaau : v;
+                }
+                snapshot.gmChunks[c] = sf4e::Game::Hash::Bytes(
+                    masked, sizeof(masked), 0x474d0001 /* 'GM' */
+                );
+            }
+        }
+        else {
+            static bool warned = false;
+            if (!warned) {
+                warned = true;
+                spdlog::warn("SOAK TEST: GameManager probe skipped, only {} bytes readable", readable);
+            }
+        }
+    }
 
     CharaActor::__publicMethods& methods = CharaActor::publicMethods;
     CharaUnit* lpCharaUnit = (src->*rSystem::publicMethods.GetCharaUnit)();

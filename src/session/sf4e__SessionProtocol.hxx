@@ -219,6 +219,20 @@ namespace sf4e {
 			MessageType type = MT_BATTLE_SYNCED;
 		};
 
+		// Soak-test GameManager probe geometry. One chunk per checksum, sampled
+		// from the GameManager base out past GM_SAVED_BYTES (what the save
+		// state actually copies) so we can tell whether the round state that
+		// forks lives in memory we never save.
+		// Probe ONLY the region we actually save. Measured: reading past 0x49c
+		// lands in unrelated heap allocations that differ between two machines
+		// by nature, so it reported a divergence every snapshot and buried the
+		// signal. Everything fully inside the object compares clean during
+		// normal play, so a hit here now means something real.
+		static const size_t GM_CHUNK_BYTES = 64;
+		static const size_t GM_SAVED_BYTES = 0x49c;   // what SaveState copies
+		static const size_t GM_PROBE_BYTES = 1152;    // 18 chunks, last one ending before 0x49c
+		static const size_t GM_MAX_CHUNKS = GM_PROBE_BYTES / GM_CHUNK_BYTES;
+
 		struct StateSnapshot {
 			struct CharaStateSnapshot {
 				int status;
@@ -247,6 +261,19 @@ namespace sf4e {
 			// rounds. Diagnostic only -- not part of the abort decision.
 			int battleFlow = 0;
 			int battleFlowSubstate = 0;
+			// Soak-test diagnostic: checksums of successive GM_CHUNK_BYTES
+			// blocks of the game's GameManager, starting at its base and
+			// running PAST the 0x49c the save state copies. The round/match
+			// bookkeeping (how many rounds each side has won) is believed to
+			// live here, and 0x49c is a GUESS -- so if a chunk whose offset is
+			// >= 0x49c diverges between the two machines, round state is
+			// living in memory we never save or restore, which is exactly how
+			// one machine can decide "match over" while the other fights on.
+			// Diagnostic only -- never part of the abort decision.
+			//
+			// A FIXED ARRAY, not a vector: this whole struct is compared with
+			// memcmp (see SessionClient), so it must stay free of pointers.
+			uint32_t gmChunks[GM_MAX_CHUNKS] = { 0 };
 			CharaStateSnapshot chara[2];
 		};
 
@@ -286,7 +313,7 @@ namespace sf4e {
 
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(StateSnapshot::CharaStateSnapshot, status, rootPos, side, vit, vitmax, revenge, revengemax, recoverable, recoverablemax, super, supermax, sctimeamt, sctimemax, uctime, uctimemax, damage, combodamage);
 		// (StateSnapshot itself is defined below with battleFlow included.)
-		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(StateSnapshot, frameIdx, battleFlow, battleFlowSubstate, chara);
+		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(StateSnapshot, frameIdx, battleFlow, battleFlowSubstate, gmChunks, chara);
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(BattleSnapshot, type, snapshot);
 
 		// Names every snapshot field that differs between two states, with both

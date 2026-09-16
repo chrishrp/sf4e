@@ -20,6 +20,10 @@ std::string sf4e::sidecarHash;
 sf4e::Args sf4e::args;
 HANDLE sf4e::hSyncEvent;
 
+// THIS IS A SOAK-TEST BUILD. See sf4e::bSoakTest in sf4e.hxx. Flip to false
+// (and rebuild) to get normal, human-driven behaviour back.
+bool sf4e::bSoakTest = true;
+
 using rIEmSpriteAction = Dimps::Eva::IEmSpriteAction;
 using rIEmSpriteNode = Dimps::Eva::IEmSpriteNode;
 using rIEmTaskFunctor = Dimps::Eva::IEmTaskFunctor;

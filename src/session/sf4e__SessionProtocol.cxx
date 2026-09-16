@@ -90,6 +90,26 @@ namespace sf4e {
 				FPF(damage); FPF(combodamage);
 				#undef FPF
 			}
+			// Soak-test diagnostic: which part of the GameManager forked. An
+			// offset >= GM_SAVED_BYTES means the diverging round/match state
+			// lives PAST what the save state copies, i.e. it is never restored
+			// on a rollback -- the suspected cause of the round-end desync.
+			{
+				std::string gm;
+				int shown = 0;
+				for (size_t c = 0; c < GM_MAX_CHUNKS; c++) {
+					if (mine.gmChunks[c] == theirs.gmChunks[c]) continue;
+					if (shown++ >= 8) { gm += ", ..."; break; }
+					size_t off = c * GM_CHUNK_BYTES;
+					if (!gm.empty()) gm += ", ";
+					gm += "+" + std::to_string(off);
+					if (off >= GM_SAVED_BYTES) gm += "(UNSAVED!)";
+				}
+				if (!gm.empty()) {
+					if (!out.empty()) out += ", ";
+					out += "GameManager chunks differ at " + gm;
+				}
+			}
 			if (out.empty()) {
 				out = "(the compared fields all match; the drift is in state the snapshot does not cover)";
 			}
