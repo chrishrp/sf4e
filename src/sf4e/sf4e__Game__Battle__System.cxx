@@ -371,7 +371,7 @@ static const char* BattleFlowName(DWORD f) {
 // shows whether the deciding transition happened during a rollback.
 // Called from both the normal frame path and the rollback re-sim path.
 static void LogFlowTransition(rSystem* sys) {
-    if (!sf4e::bSoakTest || fSystem::ggpo == nullptr) {
+    if (!sf4e::bDiagLogging || fSystem::ggpo == nullptr) {
         return;
     }
     static DWORD lastFlow = 0xffffffff;
@@ -1205,7 +1205,7 @@ void fSystem::BuildSnapshot(rSystem* src, StateSnapshot& snapshot) {
     // >= that is proof the round state we fail to save is what forks a
     // round-end. Bounded by VirtualQuery so reading past the object can never
     // fault.
-    if (sf4e::bSoakTest) {
+    if (sf4e::bDiagLogging) {
         const uint8_t* gm = (const uint8_t*)(src->*rSystem::publicMethods.GetGameManager)();
         MEMORY_BASIC_INFORMATION mbi = { 0 };
         size_t readable = 0;

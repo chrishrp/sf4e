@@ -168,7 +168,10 @@ int fMain::Initialize(void* a, void* b, void* c) {
             spdlog::flush_every(std::chrono::seconds(1));
             spdlog::info("Welcome to sf4e");
             if (sf4e::bSoakTest) {
-                spdlog::warn("=== SOAK TEST BUILD: automated endless matches, extra diagnostics. Not for normal play. ===");
+                spdlog::warn("=== SOAK TEST BUILD: automated endless matches. The pad is overridden; not for normal play. ===");
+            }
+            else if (sf4e::bDiagLogging) {
+                spdlog::warn("=== DIAGNOSTIC BUILD: plays normally, logs battle-flow + state divergence. Both players must run this same build. ===");
             }
         }
         catch (const spdlog::spdlog_ex& ex)

@@ -28,11 +28,18 @@ namespace sf4e {
 	extern Args args;
 	extern HANDLE hSyncEvent;
 
-	// Unattended soak-test build: plays endless automated matches (random
-	// local inputs + auto-rematch, no human at either PC) and turns on the
-	// round-transition diagnostics, so a rare KO/round-end desync can be
-	// reproduced and localised overnight. Never enabled in a normal release.
+	// AUTOMATION. Unattended soak-test build: random local inputs, auto-rematch
+	// and the stalled-match watchdog, so two PCs play endless matches with
+	// nobody at the keyboard. MUST be false for any build a human will play on
+	// -- it overrides the pad, so the player cannot control their character.
 	extern bool bSoakTest;
+
+	// DIAGNOSTICS, independent of the automation above: battle-flow transition
+	// logging (with the DURING-ROLLBACK marker) and the GameManager divergence
+	// probe in the state snapshot. Safe to ship to a tester who is playing
+	// normally -- it only writes to the log. Note it changes the snapshot wire
+	// format, so BOTH players must run the same build.
+	extern bool bDiagLogging;
 
 	void Install(HINSTANCE hinstDll, const Payload* const payload);
 
