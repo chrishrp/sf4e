@@ -458,7 +458,7 @@ int SessionServer::Step()
 	return 0;
 }
 
-void SessionServer::Respond(HSteamNetConnection client, nlohmann::json& msg) {
+void SessionServer::Respond(HSteamNetConnection client, const nlohmann::json& msg) {
 	std::string buf = msg.dump();
 	_interface->SendMessageToConnection(
 		client, buf.c_str(), (uint32)buf.length(),
@@ -466,7 +466,7 @@ void SessionServer::Respond(HSteamNetConnection client, nlohmann::json& msg) {
 	);
 }
 
-void SessionServer::BroadcastMessage(nlohmann::json& msg) {
+void SessionServer::BroadcastMessage(const nlohmann::json& msg) {
 	// XXX (adanducci) replace SendMessageToConnection with SendMessages for
 	// peformance gains, but ensuring low-copy with it is annoyingly difficult.
 	std::string buf = msg.dump();
