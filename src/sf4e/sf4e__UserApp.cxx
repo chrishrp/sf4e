@@ -133,6 +133,29 @@ void fUserApp::_OnVsBattleTasksRegistered()
                 spdlog::info("Netplay: feeding spectator {} at port {}", memberData.name, memberData.port);
             }
         }
+        // Snapshots are per battle. The LOCAL ones were already cleared at
+        // teardown for exactly this reason, but the remote ones never were --
+        // they were inserted and read and never erased, so an opponent's
+        // snapshot from an earlier match sat in the map forever. Any later
+        // match that ran long enough to reach the same frame number was then
+        // compared against a completely unrelated match and declared a desync,
+        // ending it. Frame 7800 is a little over two minutes, which is why
+        // this looked like "long matches randomly desync".
+        netplay->client.pendingRemoteSnapshots.clear();
+
+        // Opt-in direct play: if both players asked for it and a direct path
+        // opens, point GGPO at the other machine and skip the relay hop. If
+        // anything fails we fall through with the relay address already in
+        // place, so the match plays exactly as it does today.
+        bool direct = netplay->client.TryDirectPath();
+        if (direct) {
+            for (int i = 0; i < numPlayers; i++) {
+                if (players[i].type == GGPO_PLAYERTYPE_REMOTE) {
+                    strcpy_s(players[i].u.remote.ip_address, 32, netplay->client.DirectPeerIp().c_str());
+                    players[i].u.remote.port = netplay->client.DirectPeerPort();
+                }
+            }
+        }
         fSystem::StartGGPO(
             players,
             numPlayers,
@@ -182,12 +205,17 @@ void fUserApp::_OnVsPreBattleTasksRegistered()
     Dimps::Platform::dString* stageName = rVsMode::GetStageName(mode);
     rVsMode::ConfirmedPlayerConditions* conditions = rVsMode::GetConfirmedPlayerConditions(mode);
     for (int i = 0; i < 2; i++) {
+        sf4e::SessionProtocol::SanitizeCharaConditions(netplay->client._matchData.chara[i]);
         *(rVsMode::ConfirmedPlayerConditions::GetCharaID(&conditions[i])) = netplay->client._matchData.chara[i].charaID;
         *(rVsMode::ConfirmedPlayerConditions::GetSideActive(&conditions[i])) = 1;
         rVsMode::ConfirmedCharaConditions* charaConditions = rVsMode::ConfirmedPlayerConditions::GetCharaConditions(&conditions[i]);
         memcpy_s(charaConditions, charaConditionSize, &netplay->client._matchData.chara[i], charaConditionSize);
     }
 
+    if (!sf4e::SessionProtocol::StageIDValid(netplay->client._matchData.stageID)) {
+        spdlog::warn("Stage {} is out of range; using stage 0", netplay->client._matchData.stageID);
+        netplay->client._matchData.stageID = 0;
+    }
     (stageName->*Dimps::Platform::dString::publicMethods.assign)(Dimps::stageCodes[netplay->client._matchData.stageID], 4);
     *(rVsMode::GetStageCode(mode)) = netplay->client._matchData.stageID;
 }

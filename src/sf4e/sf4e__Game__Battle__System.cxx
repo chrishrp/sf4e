@@ -25,6 +25,9 @@
 #include "../Dimps/Dimps__Game__Battle__System.hxx"
 #include "../Dimps/Dimps__Game__Battle__Training.hxx"
 #include "../Dimps/Dimps__Game__Battle__Vfx.hxx"
+#include "../Dimps/Dimps.hxx"
+#include "../Dimps/Dimps__Event.hxx"
+#include "../Dimps/Dimps__GameEvents.hxx"
 #include "../Dimps/Dimps__Math.hxx"
 #include "../Dimps/Dimps__Pad.hxx"
 #include "../Dimps/Dimps__Platform.hxx"
@@ -73,9 +76,117 @@ using fVsBattle = sf4e::GameEvents::VsBattle;
 bool fSystem::bHaltAfterNext = false;
 bool fSystem::bUpdateAllowed = true;
 int fSystem::nExtraFramesToSimulate = 0;
+bool fSystem::bGgpoAssertAbort = false;
 int fSystem::nFramesToSkip = 0;
 int fSystem::nNextBattleStartFlowTarget = -1;
 int fSystem::nRandomizeLocalInputsEveryXFramesInGGPO = 0;
+// Off by default. The idea was to stop a rollback crossing a round reset by
+// holding the transition until inputs confirmed -- but "unconfirmed > 0" is
+// permanently true at any real ping, because GGPO always runs a few frames
+// ahead of its last confirmed frame while both sides are sending. So the hold
+// could never clear, every boundary cost a flat 30-frame stall, and those were
+// 30 frames with no network pump. Kept behind SF4E_ROUND_CHECKPOINT purely so
+// the experiment can be re-run; it needs a different mechanism, not a longer
+// deadline.
+bool fSystem::bRoundCheckpoint = false;
+int fSystem::nCheckpointHeldFrames = 0;
+
+namespace {
+    // Pad bits, as the overlay names them.
+    const uint32_t PAD_UP = 0x1, PAD_DOWN = 0x2, PAD_LEFT = 0x4, PAD_RIGHT = 0x8;
+    const uint32_t PAD_LP = 0x10, PAD_MP = 0x20, PAD_LK = 0x40, PAD_MK = 0x80;
+    const uint32_t PAD_HP = 0x400, PAD_HK = 0x800;
+    const uint32_t PAD_PPP = PAD_LP | PAD_MP | PAD_HP;
+    const uint32_t PAD_KKK = PAD_LK | PAD_MK | PAD_HK;
+
+    // Scripted motions, written facing RIGHT. Mirrored at playback for the
+    // side that faces left, so both players actually throw moves.
+    //
+    // Random button mashing effectively never produces a quarter circle, so
+    // the earlier soak exercised walking and normals and nothing else -- no
+    // specials, no supers, no ultra cinematics, which are the heaviest state
+    // the engine has and exactly where a lossy restore would show.
+    struct Motion { const uint32_t* steps; int len; const char* name; };
+
+    const uint32_t MOT_QCF_LP[]  = { PAD_DOWN, PAD_DOWN|PAD_RIGHT, PAD_RIGHT, PAD_RIGHT|PAD_LP };
+    const uint32_t MOT_QCF_HP[]  = { PAD_DOWN, PAD_DOWN|PAD_RIGHT, PAD_RIGHT, PAD_RIGHT|PAD_HP };
+    const uint32_t MOT_QCB_HK[]  = { PAD_DOWN, PAD_DOWN|PAD_LEFT,  PAD_LEFT,  PAD_LEFT|PAD_HK };
+    const uint32_t MOT_DP_HP[]   = { PAD_RIGHT, PAD_DOWN, PAD_DOWN|PAD_RIGHT, PAD_DOWN|PAD_RIGHT|PAD_HP };
+    const uint32_t MOT_CHARGE[]  = { PAD_LEFT, PAD_LEFT, PAD_LEFT, PAD_LEFT, PAD_LEFT, PAD_RIGHT|PAD_HK };
+    // Two quarter circles: super with one punch, ultra with all three.
+    const uint32_t MOT_SUPER[]   = { PAD_DOWN, PAD_DOWN|PAD_RIGHT, PAD_RIGHT,
+                                     PAD_DOWN, PAD_DOWN|PAD_RIGHT, PAD_RIGHT, PAD_RIGHT|PAD_HP };
+    const uint32_t MOT_ULTRA_P[] = { PAD_DOWN, PAD_DOWN|PAD_RIGHT, PAD_RIGHT,
+                                     PAD_DOWN, PAD_DOWN|PAD_RIGHT, PAD_RIGHT, PAD_RIGHT|PAD_PPP };
+    const uint32_t MOT_ULTRA_K[] = { PAD_DOWN, PAD_DOWN|PAD_RIGHT, PAD_RIGHT,
+                                     PAD_DOWN, PAD_DOWN|PAD_RIGHT, PAD_RIGHT, PAD_RIGHT|PAD_KKK };
+
+    const Motion MOTIONS[] = {
+        { MOT_QCF_LP,  4, "qcf+LP" },
+        { MOT_QCF_HP,  4, "qcf+HP" },
+        { MOT_QCB_HK,  4, "qcb+HK" },
+        { MOT_DP_HP,   4, "dp+HP" },
+        { MOT_CHARGE,  6, "charge+HK" },
+        { MOT_SUPER,   7, "super" },
+        { MOT_ULTRA_P, 7, "ultra PPP" },
+        { MOT_ULTRA_K, 7, "ultra KKK" },
+    };
+    const int NUM_MOTIONS = sizeof(MOTIONS) / sizeof(MOTIONS[0]);
+
+    struct MotionState {
+        const Motion* m = nullptr;
+        int step = 0;
+        int hold = 0;
+        bool mirror = false;
+    };
+    MotionState g_motion[2];
+
+    uint32_t MirrorLeftRight(uint32_t bits) {
+        uint32_t lr = bits & (PAD_LEFT | PAD_RIGHT);
+        bits &= ~(PAD_LEFT | PAD_RIGHT);
+        if (lr & PAD_LEFT)  bits |= PAD_RIGHT;
+        if (lr & PAD_RIGHT) bits |= PAD_LEFT;
+        return bits;
+    }
+
+    // One frame of input for a side: continue a motion if one is running,
+    // otherwise usually a plain button and occasionally start a new motion.
+    uint32_t NextSoakInput(int side) {
+        MotionState& st = g_motion[side];
+        if (st.m != nullptr) {
+            uint32_t bits = st.m->steps[st.step];
+            if (st.mirror) {
+                bits = MirrorLeftRight(bits);
+            }
+            // Three frames per step: long enough for the engine to register
+            // each direction, short enough to stay inside the motion window.
+            if (++st.hold >= 3) {
+                st.hold = 0;
+                if (++st.step >= st.m->len) {
+                    st.m = nullptr;
+                    st.step = 0;
+                }
+            }
+            return bits;
+        }
+        // Roughly one motion every couple of seconds per side.
+        if ((sf4e::localRand() % 24) == 0) {
+            st.m = &MOTIONS[sf4e::localRand() % NUM_MOTIONS];
+            st.step = 0;
+            st.hold = 0;
+            // Side 1 starts facing left; randomise a little so both
+            // orientations get exercised as they swap sides.
+            st.mirror = (side == 1) ? ((sf4e::localRand() % 8) != 0) : ((sf4e::localRand() % 8) == 0);
+            return st.mirror ? MirrorLeftRight(st.m->steps[0]) : st.m->steps[0];
+        }
+        uint32_t bits = 1u << (sf4e::localRand() % 14);
+        if ((sf4e::localRand() & 3) == 0) {
+            bits |= 1u << (sf4e::localRand() % 14);
+        }
+        return bits;
+    }
+}
+
 
 GGPOPlayerHandle fSystem::localPlayerHandle = GGPO_INVALID_HANDLE;
 GGPOSession* fSystem::ggpo = nullptr;
@@ -125,6 +236,18 @@ static void EnforceSimFpControl() {
 bool fSystem::extendedLoadRequest = false;
 bool fSystem::extendedSaveRequest = false;
 bool fSystem::idempotenceCheckRequest = false;
+bool fSystem::bSoakRestartPending = false;
+int fSystem::nUntrackedIdleFrames = 0;
+// ON by default from this build. Round transitions belong inside the rollback
+// timeline; leaving them outside is what produced every round-boundary desync.
+// Both players must agree, so an env var that one side forgets is worse than no
+// switch at all -- SF4E_GGPO_IDLE=0 can still turn it off for an A/B.
+bool fSystem::bGgpoDuringIdle = true;
+bool fSystem::bMatchLeftIdle = false;
+int fSystem::nIdleFramesInTimeline = 0;
+bool fSystem::bSoakCharasPreset = false;
+int fSystem::nIdemEveryFrames = 0;
+int fSystem::nIdemCounter = 0;
 bool fSystem::bSkipResetAfterMemento = false;
 bool fSystem::bRestoreGfxLast = true;
 bool fSystem::bInRollback = false;
@@ -336,6 +459,7 @@ static bool AdvanceSpectatorFrame(rSystem* _this) {
 // BattleUpdate.
 static DWORD g_ggpoStartTick = 0;
 static bool g_ggpoReachedRunning = false;
+static DWORD g_connInterruptedTick = 0;
 static void AbortMatchStart(const char* why);   // defined with StartGGPO below
 
 static const char* BattleFlowName(DWORD f) {
@@ -421,6 +545,12 @@ void fSystem::BattleUpdate() {
     // back to the lobby so the auto-ready starts a fresh match instead. Checked
     // before the bUpdateAllowed bail-out, because a stalled match is exactly
     // the case where the update is not allowed to proceed.
+    // Soak runs only, again. Arming this for real matches turned a black
+    // screen into a CRASH: AbortMatchStart only sets RS_ISLEAVING, it does not
+    // close the GGPO session, so GGPO kept calling back into a battle system
+    // that was tearing down and the game dereferenced null half a second
+    // later. Recovering from a stalled start needs the session closed first,
+    // which is a bigger change than this watchdog.
     if (sf4e::bSoakTest && ggpo != nullptr && !g_ggpoReachedRunning &&
         g_ggpoStartTick != 0 && (GetTickCount() - g_ggpoStartTick) > 30000) {
         g_ggpoStartTick = 0;
@@ -438,6 +568,54 @@ void fSystem::BattleUpdate() {
     // Soak test: report any battle-flow change the previous frame produced.
     LogFlowTransition(_this);
 
+    // Round-boundary checkpoint.
+    //
+    // The round reset -- health restored, characters returned to their start
+    // marks, flow advanced -- is not rollback-safe. When a rollback spans it,
+    // one path has applied the reset and the other has not, and the restore
+    // produces a mixture of the two. The sync test caught it exactly:
+    //
+    //   GAMEPLAY divergence @ frame 2226: battleFlow a=1 b=16,
+    //     P1.vit a=1000 b=0, P1.rootPos[0] a=-1.500000 b=-3.108732
+    //
+    // State `a` is a freshly reset round; state `b` is mid-match. That is the
+    // desync players hit "al acabar partida", and it is why input delay 0 --
+    // which rolls back further and more often -- makes it far more likely.
+    //
+    // So: roll back freely during the FIGHT, where responsiveness matters, and
+    // hold at every other flow state until the inputs are confirmed. Nothing
+    // can then roll back across a reset. The hold costs about one round trip
+    // and lands during the KO freeze and round-change animation.
+    if (ggpo != nullptr && !syncTest.bActive && bRoundCheckpoint) {
+        DWORD flowNow = *rSystem::staticVars.CurrentBattleFlow;
+        if (flowNow != BF__FIGHT) {
+            int unconfirmed = 0;
+            if (GGPO_SUCCEEDED(ggpo_get_unconfirmed_depth(ggpo, &unconfirmed)) && unconfirmed > 0) {
+                // Bounded, so a peer that stops sending can never freeze the
+                // game here: past the cap we proceed and accept the risk,
+                // which is the same behaviour as before this existed.
+                if (nCheckpointHeldFrames < 30) {
+                    nCheckpointHeldFrames++;
+                    if (nCheckpointHeldFrames == 1) {
+                        spdlog::info("Round checkpoint: holding at flow {} until inputs confirm ({} unconfirmed)",
+                            (int)flowNow, unconfirmed);
+                    }
+                    return;
+                }
+                if (nCheckpointHeldFrames == 30) {
+                    nCheckpointHeldFrames++;
+                    spdlog::warn("Round checkpoint: gave up waiting after 30 frames; continuing");
+                }
+            }
+            else {
+                nCheckpointHeldFrames = 0;
+            }
+        }
+        else {
+            nCheckpointHeldFrames = 0;
+        }
+    }
+
     if (ggpo && nFramesToSkip > 0) {
         // Honour a time-sync request: hold the simulation this frame while
         // rendering continues, so the opponent can catch up without a freeze.
@@ -445,10 +623,58 @@ void fSystem::BattleUpdate() {
         return;
     }
 
-    if (ggpo && *rSystem::staticVars.CurrentBattleFlow != BF__IDLE) {
+    // The BF__IDLE bypass, and why this is a switch rather than a deletion.
+    //
+    // Skipping GGPO while the flow is idle simulates those frames outside the
+    // rollback timeline: not saved, not advanced, unreplayable. Round
+    // transitions pass through idle, which is why every divergence logged so
+    // far is a round reset the re-simulation failed to perform.
+    //
+    // Bringing them in is the principled fix, but it is not obviously safe
+    // online: two machines can spend DIFFERENT numbers of frames idle (load
+    // times, rendering), and if those become GGPO frames the two timelines are
+    // different lengths, which is a desync by construction. A sync test has one
+    // machine and no network, so it can answer whether the idle bypass is the
+    // cause without taking that risk.
+    // BF__IDLE covers two completely different situations, and only one of them
+    // may go through GGPO.
+    //
+    // Before the battle exists, the flow is idle and there is nothing to save:
+    // letting GGPO run here calls save_game_state on a battle that has not been
+    // constructed and faults immediately (measured -- first frame after "GGPO:
+    // Running", null deref in the game). That is what the original guard was
+    // protecting, and it was right to.
+    //
+    // Mid-match round transitions are also idle, and those are exactly the
+    // frames that must be in the timeline: skipping them simulates the round
+    // reset outside the rollback, which cannot then be replayed. Every
+    // divergence logged so far is that reset failing to reproduce.
+    //
+    // A match that has already left idle once is in the second case.
+    DWORD flowNow = *rSystem::staticVars.CurrentBattleFlow;
+    if (ggpo && flowNow != BF__IDLE) {
+        bMatchLeftIdle = true;
+    }
+    if (ggpo && flowNow == BF__IDLE && bGgpoDuringIdle && bMatchLeftIdle) {
+        // An idle frame that now goes THROUGH the timeline. Online, both
+        // machines must run the same number of these or their timelines are
+        // different lengths -- a desync by construction, and invisible to a
+        // single-machine sync test. Count them so the two logs can be compared
+        // directly instead of inferring it from whether the match survived.
+        nIdleFramesInTimeline++;
+    }
+    if (ggpo && (flowNow != BF__IDLE || (bGgpoDuringIdle && bMatchLeftIdle))) {
         GGPOErrorCode result = GGPO_OK;
         if (localPlayerHandle != GGPO_INVALID_HANDLE) {
-            if (nRandomizeLocalInputsEveryXFramesInGGPO != 0) {
+            if (syncTest.bSoak) {
+                // Every frame, so a motion plays out as a real sequence. The
+                // every-N-frames path below cannot express one.
+                for (int s = 0; s < 2; s++) {
+                    uint32_t bits = NextSoakInput(s);
+                    randomInputs[s] = { bits, bits };
+                }
+            }
+            else if (nRandomizeLocalInputsEveryXFramesInGGPO != 0) {
                 int currentFrame = rSystem::GetNumFramesSimulated_FixedPoint(_this)->integral;
                 // The frame counter restarts at 0 on every new match while
                 // nLastRandomInputFrame is a static that survives it, so the
@@ -522,28 +748,60 @@ void fSystem::BattleUpdate() {
                     }
                     CaptureSnapshot(_this);
 
-                    // Network health every ten seconds, so a tester's log says
-                    // what the connection was like without reading the screen.
+                    // Network health, summarised over the whole ten-second
+                    // window rather than sampled at one instant.
+                    //
+                    // This used to read the stats only on the 600th frame and
+                    // print that single value. A player watching the on-screen
+                    // table -- which reads the SAME field every frame -- saw
+                    // spikes to 180 ms while the log serenely reported 67, and
+                    // the log was used to argue the connection was fine. One
+                    // sample in six hundred cannot support that claim, so take
+                    // every frame and report the range.
                     int frame = rSystem::GetNumFramesSimulated_FixedPoint(_this)->integral;
-                    if (frame > 0 && frame % 600 == 0) {
-                        for (int i = 0; i < MAX_SF4E_PROTOCOL_USERS; i++) {
-                            if (players[i].type != GGPO_PLAYERTYPE_REMOTE) {
-                                continue;
-                            }
-                            GGPONetworkStats stats;
-                            if (GGPO_SUCCEEDED(ggpo_get_network_stats(ggpo, players[i].handle, &stats))) {
-                                spdlog::info(
-                                    "GGPO stats @ frame {}: ping {} ms, send queue {}, recv queue {}, "
-                                    "local {} frames behind, remote {} frames behind, {} kbps",
-                                    frame,
-                                    stats.network.ping,
-                                    stats.network.send_queue_len,
-                                    stats.network.recv_queue_len,
-                                    stats.timesync.local_frames_behind,
-                                    stats.timesync.remote_frames_behind,
-                                    stats.network.kbps_sent
-                                );
-                            }
+                    for (int i = 0; i < MAX_SF4E_PROTOCOL_USERS; i++) {
+                        if (players[i].type != GGPO_PLAYERTYPE_REMOTE) {
+                            continue;
+                        }
+                        GGPONetworkStats stats;
+                        if (!GGPO_SUCCEEDED(ggpo_get_network_stats(ggpo, players[i].handle, &stats))) {
+                            continue;
+                        }
+                        PlayerConnectionInfo& p = players[i];
+                        if (stats.network.ping < p.pingMin) p.pingMin = stats.network.ping;
+                        if (stats.network.ping > p.pingMax) p.pingMax = stats.network.ping;
+                        p.pingSum += stats.network.ping;
+                        // A spike is what players actually feel, so count them
+                        // rather than letting an average bury them.
+                        if (stats.network.ping > 100) p.pingOver100++;
+                        if (stats.timesync.remote_frames_behind > p.remoteBehindMax) {
+                            p.remoteBehindMax = stats.timesync.remote_frames_behind;
+                        }
+                        p.pingSamples++;
+
+                        if (frame > 0 && frame % 600 == 0 && p.pingSamples > 0) {
+                            spdlog::info(
+                                "GGPO stats @ frame {}: ping now {} ms (min {} / avg {} / max {}, "
+                                "{} of {} samples over 100 ms), send queue {}, recv queue {}, "
+                                "local {} frames behind, remote {} frames behind (worst {}), {} kbps, "
+                                "{} outage(s) totalling {:.1f}s",
+                                frame,
+                                stats.network.ping,
+                                p.pingMin,
+                                (int)(p.pingSum / p.pingSamples),
+                                p.pingMax,
+                                p.pingOver100,
+                                p.pingSamples,
+                                stats.network.send_queue_len,
+                                stats.network.recv_queue_len,
+                                stats.timesync.local_frames_behind,
+                                stats.timesync.remote_frames_behind,
+                                p.remoteBehindMax,
+                                stats.network.kbps_sent,
+                                p.outages,
+                                p.outageMsTotal / 1000.0
+                            );
+                            p.ResetStatsWindow();
                         }
                     }
                 }
@@ -592,7 +850,26 @@ void fSystem::BattleUpdate() {
         if (fSoundPlayerManager::bUsePureSounds) {
             fSoundPlayerManager::SyncState();
         }
+
+        // With a session live, reaching here means the flow is BF__IDLE and the
+        // guard above sent us around GGPO: the game simulates, but the frame is
+        // never saved, never advanced through ggpo_advance_frame, and so is not
+        // in the rollback timeline at all. Anything that changes here cannot be
+        // replayed -- which is the shape of every divergence we have logged, a
+        // round reset the original run performed and the re-simulation did not.
+        // Measure it rather than argue it: count the frames and name the
+        // transitions that happen on them.
+        DWORD flowBefore = *rSystem::staticVars.CurrentBattleFlow;
         (_this->*rSystem::publicMethods.BattleUpdate)();
+        if (ggpo != nullptr) {
+            nUntrackedIdleFrames++;
+            DWORD flowAfter = *rSystem::staticVars.CurrentBattleFlow;
+            if (flowAfter != flowBefore) {
+                spdlog::warn("Battle flow {} -> {} happened OUTSIDE ggpo (untracked frame {}); "
+                    "this transition is not in the rollback timeline",
+                    (int)flowBefore, (int)flowAfter, nUntrackedIdleFrames);
+            }
+        }
     }
     
     if (nExtraFramesToSimulate > 0) {
@@ -630,9 +907,20 @@ void fSystem::BattleUpdate() {
 void fSystem::CloseBattle() {
     rSystem* _this = (rSystem*)this;
     if (ggpo) {
+        // Report the idle-frame counts for ANY session, not just a sync test.
+        // Online is the only place the two numbers can disagree, and online is
+        // exactly where there is no sync-test summary to carry them.
+        if (bGgpoDuringIdle) {
+            spdlog::info("Match idle frames: {} inside the timeline, {} outside. "
+                "The inside count must match the other PC exactly.",
+                nIdleFramesInTimeline, nUntrackedIdleFrames);
+        }
+        nIdleFramesInTimeline = 0;
+        nUntrackedIdleFrames = 0;
         ggpo_close_session(ggpo);
         ggpo = nullptr;
     }
+    bMatchLeftIdle = false;
     nFramesToSkip = 0;
     for (int i = 0; i < NUM_SAVE_STATES; i++) {
         if (saveStates[i].used) {
@@ -645,15 +933,64 @@ void fSystem::CloseBattle() {
     snapshotMap.clear();
 
     if (syncTest.bActive) {
-        spdlog::info(
-            "Sync test finished: {} frames verified, {} state mismatches (last @ {}), {} raw-byte differences, {} GAMEPLAY divergences (last @ {})",
-            syncTest.nFramesVerified,
-            syncTest.nMismatches,
-            syncTest.nLastMismatchFrame,
-            syncTest.nRawMismatches,
-            syncTest.nGameplayMismatches,
-            syncTest.nLastGameplayMismatchFrame
-        );
+        syncTest.nMatchesRun++;
+        syncTest.nTotalFramesVerified += syncTest.nFramesVerified;
+        syncTest.nTotalGameplayMismatches += syncTest.nGameplayMismatches;
+        // Report the two signals separately. "Frames verified" counts only
+        // fully checksum-clean frames, and the actor's cosmetic bytes drift on
+        // every single rollback -- so it reads as a flat 0 and looks like
+        // nothing was checked at all. What matters is how many frames were
+        // checked and how many of those diverged in state the GAME reads.
+        {
+            int checked = syncTest.nFramesVerified + syncTest.nMismatches;
+            // Frames the rollback could never reproduce, because they never
+            // entered the timeline. If the divergence count tracks this, the
+            // round-reset failure is a consequence of the BF__IDLE bypass.
+            spdlog::info(
+                "Sync test finished: {} frames checked, {} GAMEPLAY-clean ({} divergences, last @ {}); "
+                "checksum-clean {} ({} differ, last @ {}, {} raw-byte) - checksum noise is expected, gameplay is the verdict",
+                checked,
+                checked - syncTest.nGameplayMismatches,
+                syncTest.nGameplayMismatches,
+                syncTest.nLastGameplayMismatchFrame,
+                syncTest.nFramesVerified,
+                syncTest.nMismatches,
+                syncTest.nLastMismatchFrame,
+                syncTest.nRawMismatches
+            );
+            spdlog::info("  {} frames simulated OUTSIDE ggpo this match (battle flow was idle) - "
+                "these are not in the rollback timeline", nUntrackedIdleFrames);
+            nUntrackedIdleFrames = 0;
+            spdlog::info("  {} idle frames ran INSIDE the timeline this match - compare this number "
+                "against the other PC; they must match exactly", nIdleFramesInTimeline);
+            nIdleFramesInTimeline = 0;
+        }
+        if (syncTest.bSoak) {
+            // The running total is the number that matters across a long
+            // unattended run; a single match proves very little.
+            spdlog::warn(
+                "SOAK TOTALS after {} matches: {} frames verified, {} GAMEPLAY divergences",
+                syncTest.nMatchesRun,
+                syncTest.nTotalFramesVerified,
+                syncTest.nTotalGameplayMismatches
+            );
+            // Re-arm so the next match keeps testing without anyone touching
+            // the menus.
+            int d = syncTest.nCheckDistance;
+            bool soak = syncTest.bSoak;
+            syncTest.bActive = false;
+            syncTest.records.clear();
+            ArmSyncTest(d);
+            syncTest.bSoak = soak;
+            bSoakRestartPending = true;
+            // The GAME still has to tear its battle down. Returning here ran our
+            // half of the cleanup (GGPO closed, save states freed) and skipped
+            // the game's half entirely, so the next match started on top of a
+            // battle that was never closed and faulted walking stale objects.
+            // That is why every soak run died after exactly one match.
+            (_this->*rSystem::publicMethods.CloseBattle)();
+            return;
+        }
     }
     syncTest.bActive = false;
     syncTest.records.clear();
@@ -690,8 +1027,32 @@ void fSystem::SysMain_HandleTrainingModeFeatures() {
         mementoSaveRequest.hi = -1;
     }
 
+    // Sample the round trip WHILE the fight is moving, not once while a dummy
+    // stands still. An idle character has static meter, no move in flight and
+    // no effects -- close to the emptiest state the game can be in, and the
+    // least likely to catch state that restore drops. Driven by the soak input
+    // generator this walks through specials, supers and ultras on its own and
+    // checks the round trip at each of them.
+    if (nIdemEveryFrames > 0 && ggpo == nullptr) {
+        if (++nIdemCounter >= nIdemEveryFrames) {
+            nIdemCounter = 0;
+            idempotenceCheckRequest = true;
+        }
+    }
+
     if (idempotenceCheckRequest) {
         idempotenceCheckRequest = false;
+        // Stamp what the fight was doing at this sample, so a failing round
+        // trip can be tied to the state it happened in rather than averaged
+        // with every other sample.
+        {
+            SessionProtocol::StateSnapshot s;
+            BuildSnapshot(rSystem::staticMethods.GetSingleton(), s);
+            spdlog::info("=== idempotence sample: flow={} P1 super={} revenge={} status={} | P2 super={} revenge={} status={} ===",
+                (int)*rSystem::staticVars.CurrentBattleFlow,
+                (int)s.chara[0].super.integral, (int)s.chara[0].revenge.integral, (int)s.chara[0].status,
+                (int)s.chara[1].super.integral, (int)s.chara[1].revenge.integral, (int)s.chara[1].status);
+        }
         RunIdempotenceCheck();
     }
 
@@ -834,13 +1195,67 @@ void fSystem::RecordAllToInternalMementos(rSystem* system, GameMementoKey::Memen
 // sees it go silent and desyncs too. Leaving returns both sides to the lobby.
 static void AbortMatchStart(const char* why) {
     spdlog::error("Match start aborted: {}", why);
+
+    // Drop the session BEFORE asking the game to leave. It is half-built by
+    // definition here -- we are aborting precisely because it never reached
+    // RUNNING -- and every rollback path keys off "ggpo != nullptr", so
+    // leaving it live means the teardown can still be called back into a
+    // session that never had two players. Clearing it first makes all of
+    // those paths no-ops on the way out.
+    if (fSystem::ggpo) {
+        ggpo_close_session(fSystem::ggpo);
+        fSystem::ggpo = nullptr;
+    }
+    fSystem::nFramesToSkip = 0;
+    for (int i = 0; i < NUM_SAVE_STATES; i++) {
+        if (fSystem::saveStates[i].used) {
+            fSystem::SaveState::Free(&fSystem::saveStates[i]);
+        }
+    }
+
     rSystem* sys = rSystem::staticMethods.GetSingleton();
     if (sys) {
         *rSystem::GetReadyState(sys) = rSystem::RS_ISLEAVING;
     }
 }
 
+// GGPO tripped one of its own internal invariants.
+//
+// This used to be invisible: GGPO popped a modal dialog (freezing whichever
+// thread hit it -- the game thread) and then called exit(0). A clean exit
+// raises no exception, so the crash handler never ran, no dump was written,
+// nothing reached the log, and Windows recorded a SUCCESSFUL exit. Players
+// reported "it crashed" and we had no way to see why; one whole session ended
+// at frame 1800 with a healthy 50 ms ping and not one line explaining it.
+//
+// Now the assertion text and its source location reach the log, and the MATCH
+// ends instead of the process. GGPO's own state is inconsistent once this
+// fires, so the session has to go -- but the player keeps their game, their
+// lobby and their logs.
+static void __cdecl OnGgpoAssertFailed(const char* msg) {
+    spdlog::critical("GGPO internal assertion: {}", msg ? msg : "(no message)");
+    spdlog::critical("This is a bug in the netcode, not in your connection. "
+        "Ending the match; please send this log.");
+
+    // Do not call back into GGPO from here -- it is mid-invariant-break. Just
+    // ask the battle system to leave, the way a desync abort does.
+    fSystem::bGgpoAssertAbort = true;
+    rSystem* system = rSystem::staticMethods.GetSingleton();
+    if (system) {
+        *rSystem::GetReadyState(system) = rSystem::RS_ISLEAVING;
+    }
+}
+
 void fSystem::StartGGPO(GGPOPlayer* inPlayers, int numPlayers, int port, int frameDelay, DWORD rngSeed) {
+    // Floor the delay here as well as in the menu. The lobby is one way in; the
+    // debug overlay is another, and a stale settings file is a third. This is
+    // the single point every path passes through, so it is the one place the
+    // floor cannot be missed.
+    if (frameDelay < 1) {
+        spdlog::info("Input delay raised from {} to 1: at zero, every remote frame is a "
+            "prediction and the game rolls back on all of them.", frameDelay);
+        frameDelay = 1;
+    }
     // Re-capture the simulation FP mode fresh for this match.
     g_fpLogged = false;   // log the machine's FP word once per match
 
@@ -850,8 +1265,6 @@ void fSystem::StartGGPO(GGPOPlayer* inPlayers, int numPlayers, int port, int fra
     // round/match-ending knockout.
     if (sf4e::bSoakTest) {
         nRandomizeLocalInputsEveryXFramesInGGPO = 8;
-        g_ggpoStartTick = GetTickCount();
-        g_ggpoReachedRunning = false;
         spdlog::info("SOAK TEST: random local inputs every {} frames", nRandomizeLocalInputsEveryXFramesInGGPO);
     }
 
@@ -866,6 +1279,17 @@ void fSystem::StartGGPO(GGPOPlayer* inPlayers, int numPlayers, int port, int fra
         AbortMatchStart("player list not ready (both players not yet in the lobby)");
         return;
     }
+
+    // Installed before any session exists so an assertion during startup is
+    // logged too. Setting it repeatedly is harmless.
+    ggpo_set_assert_handler(OnGgpoAssertFailed);
+
+    // Arm the stalled-start watchdog for EVERY match. It only ran during soak
+    // tests, so a real player whose opponent vanished between the lobby and the
+    // first frame sat on a black screen forever with nothing in the log --
+    // which is exactly what the comment on the watchdog already described.
+    g_ggpoStartTick = GetTickCount();
+    g_ggpoReachedRunning = false;
 
     GGPOSessionCallbacks cb = { 0 };
     cb.begin_game = ggpo_begin_game_callback;
@@ -897,6 +1321,9 @@ void fSystem::StartGGPO(GGPOPlayer* inPlayers, int numPlayers, int port, int fra
     int localPlayerIdx = -1;
     for (int i = 0; i < 2; i++) {
         players[i].type = inPlayers[i].type;
+        // Fresh window each match: these are static and would otherwise carry
+        // the previous match's spikes into this one's summary.
+        players[i].ResetStatsWindow();
         result = ggpo_add_player(ggpo, inPlayers + i, &players[i].handle);
         if (!GGPO_SUCCEEDED(result)) {
             ggpo_close_session(ggpo);
@@ -1141,10 +1568,34 @@ bool fSystem::ggpo_on_event_callback(GGPOEvent* info) {
         spdlog::info("GGPO: Running");
         break;
     case GGPO_EVENTCODE_CONNECTION_INTERRUPTED:
-        spdlog::info("GGPO: GGPO_EVENTCODE_CONNECTION_INTERRUPTED");
+        // The freeze a player actually feels. Packets from the other machine
+        // have stopped, so the simulation stalls at the prediction limit until
+        // they come back. Worth stating plainly: two of these read as "the game
+        // froze", and the connection stats showed nothing at all, because an
+        // outage is not high ping -- it is no packets to measure.
+        g_connInterruptedTick = GetTickCount();
+        spdlog::warn("Connection interrupted: no packets from the other player. "
+            "The game will stall until they come back.");
         break;
     case GGPO_EVENTCODE_CONNECTION_RESUMED:
-        spdlog::info("GGPO: GGPO_EVENTCODE_CONNECTION_RESUMED");
+        if (g_connInterruptedTick != 0) {
+            DWORD outageMs = GetTickCount() - g_connInterruptedTick;
+            // Add the notify threshold: the link was already silent for that
+            // long before GGPO told us.
+            outageMs += 2000;
+            g_connInterruptedTick = 0;
+            for (int i = 0; i < MAX_SF4E_PROTOCOL_USERS; i++) {
+                if (players[i].type == GGPO_PLAYERTYPE_REMOTE) {
+                    players[i].outages++;
+                    players[i].outageMsTotal += outageMs;
+                }
+            }
+            spdlog::warn("Connection resumed after about {:.1f}s without packets "
+                "(that is the freeze you just felt)", outageMs / 1000.0);
+        }
+        else {
+            spdlog::info("GGPO: GGPO_EVENTCODE_CONNECTION_RESUMED");
+        }
         break;
     case GGPO_EVENTCODE_DISCONNECTED_FROM_PEER:
         if (info->u.disconnected.player >= 1000) {
@@ -1559,6 +2010,46 @@ void fSystem::DisarmSyncTest() {
     }
 }
 
+// Writes a random pairing into the confirmed conditions, the same way the
+// netplay path forces the characters both players chose. Done here because
+// this runs on the VsPreBattle hook, which is the last moment the game will
+// accept them.
+using rVsModeSoak = Dimps::GameEvents::VsMode;
+void fSystem::SyncTestPickRandomCharacters() {
+    if (bSoakCharasPreset) {
+        // The soak restart already chose these at pre-battle and the game has
+        // loaded them. Re-rolling now would change the IDs out from under the
+        // loaded assets.
+        bSoakCharasPreset = false;
+        return;
+    }
+    char* vsModeQuery[] = { "VSMode" };
+    rVsModeSoak* mode = (rVsModeSoak*)Dimps::Event::EventBaseWithEC::FindForegroundEvent(
+        Dimps::App::GetRootEvent(), vsModeQuery, 1);
+    if (!mode) {
+        return;
+    }
+    const int CHARA_COUNT = 0x2c;
+    rVsModeSoak::ConfirmedPlayerConditions* conditions = rVsModeSoak::GetConfirmedPlayerConditions(mode);
+    int picked[2] = { 0, 0 };
+    for (int i = 0; i < 2; i++) {
+        int id = localRand() % CHARA_COUNT;
+        picked[i] = id;
+        *(rVsModeSoak::ConfirmedPlayerConditions::GetCharaID(&conditions[i])) = (BYTE)id;
+        *(rVsModeSoak::ConfirmedPlayerConditions::GetSideActive(&conditions[i])) = 1;
+    }
+    // Stages differ in geometry, lighting and background objects, all of which
+    // the camera and effect containers touch -- and those are among the keys
+    // the first run reported as failing to restore.
+    int stage = sf4e::localRand() % 30;
+    Dimps::Platform::dString* stageName = rVsModeSoak::GetStageName(mode);
+    (stageName->*Dimps::Platform::dString::publicMethods.assign)(Dimps::stageCodes[stage], 4);
+    *(rVsModeSoak::GetStageCode(mode)) = stage;
+
+    spdlog::info("Sync test soak: match {} - characters {} vs {}, stage {}",
+        syncTest.nMatchesRun + 1, picked[0], picked[1], stage);
+}
+
 void fSystem::StartSyncTest() {
     syncTest.bArmed = false;
     syncTest.nFramesVerified = 0;
@@ -1618,6 +2109,14 @@ void fSystem::StartSyncTest() {
     }
 
     syncTest.bActive = true;
+
+    if (syncTest.bSoak) {
+        // Both sides mash. Random button presses produce specials, supers and
+        // ultras often enough across thousands of frames, and they exercise
+        // state a scripted routine never would.
+        nRandomizeLocalInputsEveryXFramesInGGPO = 8;
+        SyncTestPickRandomCharacters();
+    }
 
     // Mirror the online battle start so the sync test exercises the
     // same flow that real sessions do.
@@ -1829,7 +2328,6 @@ static int CompareSaves(fSystem::SaveState* a, fSystem::SaveState* b) {
             a->keyChecksums.size(),
             b->keyChecksums.size()
         );
-        int sampleBudget = 32;
         for (size_t i = 0; i < n; i++) {
             if (a->keyChecksums[i].checksum == b->keyChecksums[i].checksum) {
                 continue;
@@ -1881,18 +2379,49 @@ static int CompareSaves(fSystem::SaveState* a, fSystem::SaveState* b) {
                 continue;
             }
 
-            int shown = 0;
-            for (size_t w = 0; w < words && shown < 4 && sampleBudget > 0; w++) {
-                if (wa[w] == wb[w]) {
+            // Dump EVERY differing value word, not a sample of four.
+            //
+            // The sample was how this stayed vague for months: it showed that
+            // "runs of consecutive floats near the end" differed, which is a
+            // description of a diff rather than an identification of one. The
+            // complete offset set IS the bug -- any byte restore cannot
+            // reproduce is a byte rollback cannot preserve -- so print all of
+            // it, grouped into consecutive runs so the structure is visible,
+            // and interpreted as floats because that is what these words are.
+            size_t w = 0;
+            int runs = 0;
+            while (w < words && runs < 64) {
+                bool differs = wa[w] != wb[w] &&
+                    !(sf4e::Game::Hash::PointerNormalizer::IsHeapPointer(wa[w]) &&
+                      sf4e::Game::Hash::PointerNormalizer::IsHeapPointer(wb[w]));
+                if (!differs) {
+                    w++;
                     continue;
                 }
-                if (sf4e::Game::Hash::PointerNormalizer::IsHeapPointer(wa[w]) &&
-                    sf4e::Game::Hash::PointerNormalizer::IsHeapPointer(wb[w])) {
-                    continue;
+                size_t runStart = w;
+                while (w < words && wa[w] != wb[w] &&
+                       !(sf4e::Game::Hash::PointerNormalizer::IsHeapPointer(wa[w]) &&
+                         sf4e::Game::Hash::PointerNormalizer::IsHeapPointer(wb[w]))) {
+                    w++;
                 }
-                spdlog::error("      +{:<7} {:08x} -> {:08x}", w * 4, wa[w], wb[w]);
-                shown++;
-                sampleBudget--;
+                size_t runWords = w - runStart;
+                spdlog::error("      +{}..+{} ({} word{}, {:.1f}% into the memento)",
+                    runStart * 4, (w - 1) * 4, runWords, runWords == 1 ? "" : "s",
+                    words ? (100.0 * runStart / words) : 0.0);
+                for (size_t k = runStart; k < w && k < runStart + 12; k++) {
+                    float fa, fb;
+                    memcpy(&fa, &wa[k], 4);
+                    memcpy(&fb, &wb[k], 4);
+                    spdlog::error("        +{:<7} {:08x} -> {:08x}   {:>14.6f} -> {:<14.6f}",
+                        k * 4, wa[k], wb[k], fa, fb);
+                }
+                if (runWords > 12) {
+                    spdlog::error("        ... {} more words in this run", runWords - 12);
+                }
+                runs++;
+            }
+            if (runs >= 64) {
+                spdlog::error("      (stopped after 64 runs)");
             }
         }
         if (a->globalChecksum != b->globalChecksum) {
@@ -1969,6 +2498,123 @@ void fSystem::RunIdempotenceCheck() {
             ptrdiff_t off = (const uint8_t*)k.metadata[m].memento - (const uint8_t*)k.mementos;
             spdlog::info("   memento[{}] at +{} (id {:08x}:{:08x})",
                 m, off, k.metadata[m].id.hi, k.metadata[m].id.lo);
+        }
+
+        // Name what lives at a failing offset instead of inferring it from the
+        // float values. Two things have to be established, in order.
+        //
+        // First: does a memento offset even correspond to an object offset?
+        // The diff reports offsets into the SERIALISED buffer, and reading
+        // those as object offsets is an assumption -- if the memento is packed
+        // or reordered, every conclusion drawn from it is wrong. Compare the
+        // buffer against the live object and report how far they agree.
+        {
+            const uint8_t* live = (const uint8_t*)k.mementoableObject;
+            const uint8_t* img = (const uint8_t*)k.metadata[0].memento;
+            // Count TOTAL agreement, not the matching prefix. Byte 0 of any
+            // object is its vtable pointer, which a serialiser would replace
+            // or omit -- so a prefix test reports 0% for a memento that is
+            // otherwise a faithful image, which is exactly what it did. Also
+            // try small shifts, in case the image sits behind a header.
+            if (live && img) {
+                size_t bestShift = 0;
+                size_t bestMatch = 0;
+                for (size_t shift = 0; shift <= 64; shift += 4) {
+                    size_t n = dataSize - shift;
+                    size_t match = 0;
+                    for (size_t j = 0; j < n; j += 4) {
+                        if (*(const uint32_t*)(live + j) == *(const uint32_t*)(img + shift + j)) {
+                            match++;
+                        }
+                    }
+                    if (match > bestMatch) {
+                        bestMatch = match;
+                        bestShift = shift;
+                    }
+                }
+                size_t words = dataSize / 4;
+                spdlog::info("  memento-vs-object: best agreement {} of {} words ({:.1f}%) at shift +{}{}",
+                    bestMatch, words, words ? (100.0 * bestMatch / words) : 0.0, bestShift,
+                    bestMatch > words / 2 ? "  -> essentially a flat image; buffer offsets map to object offsets"
+                                          : "  -> NOT a flat image; buffer offsets mean nothing in the object");
+            }
+        }
+
+        // Second: walk the object for embedded polymorphic sub-objects. Every
+        // Dimps class keeps its MSVC RTTI, so a vtable at offset N names the
+        // sub-object starting there, and a failing offset belongs to whichever
+        // named sub-object most recently precedes it. Only the tail is walked:
+        // that is where all 128 differing words live.
+        {
+            const uint8_t* live = (const uint8_t*)k.mementoableObject;
+            size_t from = dataSize > 40000 ? dataSize - 40000 : 0;
+            spdlog::info("  embedded sub-objects from +{} to +{}:", from, dataSize);
+            int named = 0;
+            std::string last;
+            for (size_t off = from; off + 4 <= dataSize && named < 64; off += 4) {
+                const std::string& cn = sf4e::Rtti::GetClassName(live + off);
+                if (cn.empty() || cn == last) {
+                    continue;
+                }
+                last = cn;
+                spdlog::info("    +{:<8} {}", off, cn);
+                named++;
+            }
+            if (named == 0) {
+                spdlog::info("    (none found - the tail is plain data, not objects)");
+            }
+        }
+    }
+
+    // The decisive pass: does a restore change anything the GAME can see?
+    //
+    // Everything above measures memento bytes, which conflates two very
+    // different failures. Hair physics drifting and super meter drifting both
+    // show up as "value words differ", but only one of them can change who
+    // wins. BuildSnapshot reads the fields through the game's own accessors --
+    // health, meter, revenge, status, position -- so comparing it across a
+    // round trip asks the question directly, with no dependence on how the
+    // memento is laid out.
+    //
+    // If this passes while the byte count stays at 128, the lossy words are
+    // not gameplay state, and the netplay meter desync has a different cause.
+    // If it fails, this is the bug.
+    {
+        spdlog::info("--- pass: gameplay state across a round trip ---");
+        SaveState::Load(baseline);
+
+        SessionProtocol::StateSnapshot before;
+        BuildSnapshot(rSystem::staticMethods.GetSingleton(), before);
+
+        int slot = -1;
+        for (int i = 0; i < NUM_SAVE_STATES; i++) {
+            if (!saveStates[i].used) {
+                slot = i;
+                break;
+            }
+        }
+        if (slot < 0) {
+            spdlog::error("  no free slot for the gameplay pass");
+        }
+        else {
+            SaveState* s = &saveStates[slot];
+            SaveState::Save(s);
+            SaveState::Load(s);
+
+            SessionProtocol::StateSnapshot after;
+            BuildSnapshot(rSystem::staticMethods.GetSingleton(), after);
+            SaveState::Free(s);
+
+            bool gameplay = SessionProtocol::SnapshotGameplayDiffers(before, after);
+            bool flow = SessionProtocol::SnapshotFlowDiffers(before, after);
+            if (!gameplay && !flow) {
+                spdlog::info("  PASS: every gameplay field survived the round trip unchanged");
+                spdlog::info("  -> whatever the lossy words are, they are not state the game reads");
+            }
+            else {
+                spdlog::error("  FAIL: gameplay state changed across a pure save/restore");
+                spdlog::error("    {}", SessionProtocol::DescribeSnapshotDiff(before, after));
+            }
         }
     }
 

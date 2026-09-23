@@ -7,6 +7,10 @@ vcpkg_from_github(
         "install-cmake-export.patch"
         "synctest-no-debugbreak.patch"
         "spectator-robustness.patch"
+        # Turns an invisible process death into a logged one, pins the
+        # reverted forced symmetric rollback off, and exposes the real
+        # input-confirmation boundary.
+        "sf4e-assert-confirmed-frame.patch"
 )
 
 vcpkg_cmake_configure(

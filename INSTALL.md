@@ -37,8 +37,8 @@ Everyone in a match must be on the same version.
 
 ## Playing someone
 
-No IP addresses, no port forwarding. One of you creates a lobby and gets a
-six-character code; the other types it in.
+No port forwarding, nothing to type but a code. One of you creates a lobby
+and gets a six-character code; the other types it in.
 
 1. From the game's main menu choose **Multiplayer Battle**. The lobby opens.
 2. Press **Start** on the controller you want to play with.
@@ -55,6 +55,26 @@ keyboard: arrows, Enter, Escape, and you can type a code directly.
 
 **Input delay** is on the home screen. Start at 2. Raise it if the match
 stutters.
+
+**Connection** is also on the home screen. **PEER TO PEER** (the default)
+sends the match traffic straight between the two players for the lowest ping.
+It means your opponent's game learns your public IP address, and the mod asks
+your router (over UPnP, if it allows it) to open the game port for the match
+and closes it again afterwards. Switch to **SERVER RELAY** if you would rather
+keep your address private; everything then goes through the lobby server and
+nobody sees anyone's IP.
+
+## What the mod sends and stores
+
+* To the lobby server: your Steam display name, the lobby code, your
+  character and stage picks, and small match-state checksums used to detect
+  desyncs. No Steam ID, no password, no game files.
+* To your opponent, in peer-to-peer mode only: your IP address and the match
+  inputs.
+* On your PC: logs in `%APPDATA%\sf4e\logs\` (they contain your display name,
+  the lobby server address and lobby codes) and, if the game crashes, a
+  minidump in `%APPDATA%\sf4e\crash\`. A minidump is a copy of parts of the
+  game's memory. Nothing is uploaded automatically; you choose what to send.
 
 ## Watching a match
 

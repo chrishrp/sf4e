@@ -1,9 +1,22 @@
 # Running the sf4e lobby server
 
-Players never share IP addresses or forward ports. Both games connect *out* to
-this server: it hands out six-character lobby codes, runs the pre-match lobby,
-and relays the rollback traffic between the two players. One small Windows VPS
-runs it.
+Players never forward ports. Both games connect *out* to this server: it hands
+out six-character lobby codes, runs the pre-match lobby, and relays the
+rollback traffic between the two players unless they connect peer to peer.
+One small VPS runs it.
+
+## Linux (recommended)
+
+On a fresh Ubuntu or Debian box, clone the repository and run
+`deploy/build-linux.sh`, then `deploy/install-service-linux.sh`. The second
+script creates an unprivileged `sf4e` user, installs to `/opt/sf4e`, opens the
+UDP ports in `ufw` and registers a hardened systemd unit. Operate it with
+`systemctl status sf4e-lobby` and `journalctl -u sf4e-lobby -f`. The
+journal contains player display names and IP addresses; set a retention in
+`journald.conf` if you keep it. Building needs about 2 GB of RAM and a few
+GB of disk for the dependencies; a 1 GB box can run a binary built elsewhere.
+
+The rest of this guide covers the Windows package.
 
 ## What you need
 
@@ -43,38 +56,6 @@ itself:
 
 Zip the folder and send it. Players extract, double-click `Launcher.exe`, and
 see *Create lobby* and *Join with code*.
-
-## Running it at home
-
-A spare Windows PC or laptop on your home network works just as well as a
-VPS, with one difference: your router has to send the server's ports to it.
-
-1. Plug the laptop into mains power and, ideally, into the router with a
-   cable. Sign in to Windows.
-2. Copy the `sf4e-server` folder onto it, anywhere, and run
-   `setup-laptop.cmd` in it. It asks for administrator rights, then opens
-   the firewall, stops the machine sleeping, registers the server to start
-   at every sign-in, and starts it. It prints the machine's IP address at
-   the end; note it.
-3. Give the laptop a fixed address so the router can't move it: in your
-   router's app or web page, find *Address Reservation* (or *DHCP
-   reservation*) and reserve the address it printed.
-4. Send the ports to it. Either run `upnp-map.cmd` on the laptop, which asks
-   the router to do it automatically, or forward **UDP 23400-23420**,
-   **UDP 24001-24020** and **UDP 25001-25080** to the laptop's address by
-   hand in the router. If you
-   have two routers in a row (a provider box and your own), the provider's
-   box must forward the ports, or DMZ, to your router, and your router to
-   the laptop.
-5. Check it from another machine: `test-server.cmd LAPTOP-IP`, then
-   `test-server.cmd YOUR-PUBLIC-IP`. Both should print `"ok":true`.
-6. For a server that survives reboots with nobody around, turn on automatic
-   sign-in: `Win+R`, `netplwiz`, untick "Users must enter a user name and
-   password".
-
-Players keep using your public IP in `server.txt`. It changes when your
-provider decides; a free dynamic-DNS name, set up in the router, gives them
-an address that never changes.
 
 ## Updating a running server
 

@@ -22,6 +22,8 @@
 #include "sf4e__Platform.hxx"
 #include "sf4e__UserApp.hxx"
 #include "sf4e__Overlay.hxx"
+#include "sf4e__Lobby.hxx"
+#include "sf4e__Game__Battle__System.hxx"
 
 namespace rPlatform = Dimps::Platform;
 using rD3D = rPlatform::D3D;
@@ -166,7 +168,109 @@ int fMain::Initialize(void* a, void* b, void* c) {
             logger->flush_on(spdlog::level::trace);
             spdlog::set_default_logger(logger);
             spdlog::flush_every(std::chrono::seconds(1));
-            spdlog::info("Welcome to sf4e");
+            // The build, first line of every log. Two player logs arrived with a
+            // crash in them and there was no way to tell which build either
+            // was running, or whether the fixes they needed were even in it.
+            // The build, from the DLL's own PE header.
+            //
+            // This used to be __DATE__/__TIME__, which is baked in when THIS
+            // file is compiled -- so an incremental build that changed other
+            // sources left the stamp frozen at an older time and the log
+            // confidently reported the wrong build. The PE TimeDateStamp is
+            // written by the linker, so it moves whenever the DLL is actually
+            // relinked, which is the question being asked.
+            char built[64] = "unknown";
+            HMODULE self = nullptr;
+            if (GetModuleHandleExA(
+                    GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                    (LPCSTR)&sf4e::bSoakTest, &self) && self != nullptr) {
+                const IMAGE_DOS_HEADER* dos = (const IMAGE_DOS_HEADER*)self;
+                if (dos->e_magic == IMAGE_DOS_SIGNATURE) {
+                    const IMAGE_NT_HEADERS* nt =
+                        (const IMAGE_NT_HEADERS*)((const BYTE*)self + dos->e_lfanew);
+                    if (nt->Signature == IMAGE_NT_SIGNATURE) {
+                        time_t t = (time_t)nt->FileHeader.TimeDateStamp;
+                        struct tm g;
+                        if (gmtime_s(&g, &t) == 0) {
+                            strftime(built, sizeof(built), "%Y-%m-%d %H:%M:%S UTC", &g);
+                        }
+                    }
+                }
+            }
+            spdlog::info("Welcome to sf4e {} (built {})", SF4E_VERSION, built);
+
+            // Unattended two-machine soak. Independent of the sync test: this
+            // one needs a real opponent and a real network, which is exactly
+            // what the sync test does not have.
+            //
+            //   set SF4E_NETSOAK=1   (on BOTH machines)
+            //
+            // Both sides auto-ready, pick a fresh character and stage every
+            // match, and throw specials, supers and ultras. Join a lobby once
+            // and leave them running.
+            char delayEnv[8] = { 0 };
+            if (GetEnvironmentVariableA("SF4E_DELAY", delayEnv, sizeof(delayEnv)) > 0) {
+                sf4e::Lobby::SetInputDelayOverride(atoi(delayEnv));
+            }
+
+            char idleEnv[8] = { 0 };
+            if (GetEnvironmentVariableA("SF4E_GGPO_IDLE", idleEnv, sizeof(idleEnv)) > 0 && idleEnv[0] == '0') {
+                sf4e::Game::Battle::System::bGgpoDuringIdle = false;
+                spdlog::warn("SF4E_GGPO_IDLE=0: round transitions will run OUTSIDE the rollback "
+                    "timeline (the old behaviour). Both players must match or they will desync.");
+            }
+            spdlog::info("Round transitions are {} the rollback timeline",
+                sf4e::Game::Battle::System::bGgpoDuringIdle ? "INSIDE" : "outside");
+
+            char roundCpEnv[8] = { 0 };
+            if (GetEnvironmentVariableA("SF4E_ROUND_CHECKPOINT", roundCpEnv, sizeof(roundCpEnv)) > 0 && roundCpEnv[0] != '0') {
+                sf4e::Game::Battle::System::bRoundCheckpoint = true;
+                spdlog::warn("SF4E_ROUND_CHECKPOINT is set: round transitions will stall waiting for "
+                    "input confirmation. Known not to clear at real ping - diagnostic only.");
+            }
+
+            char netSoakEnv[8] = { 0 };
+            if (GetEnvironmentVariableA("SF4E_NETSOAK", netSoakEnv, sizeof(netSoakEnv)) > 0 && netSoakEnv[0] != '0') {
+                sf4e::bSoakTest = true;
+                sf4e::Game::Battle::System::syncTest.bSoak = true;
+                spdlog::warn("SF4E_NETSOAK is set: this PC will auto-ready and play itself. "
+                    "Run it on BOTH machines, join a lobby once, and leave them.");
+            }
+
+            // Arm the rollback sync test straight from the environment, so a
+            // tester only has to set a variable and play a VS match instead of
+            // finding it in the debug overlay:
+            //
+            //   set SF4E_SYNCTEST=6   (frames of rollback to verify, 1-8)
+            //
+            // It saves the state, rolls back that many frames, re-simulates and
+            // compares -- on ONE machine, against itself.
+            char syncTestEnv[16] = { 0 };
+            if (GetEnvironmentVariableA("SF4E_SYNCTEST", syncTestEnv, sizeof(syncTestEnv)) > 0) {
+                int distance = atoi(syncTestEnv);
+                if (distance > 0) {
+                    sf4e::Game::Battle::System::ArmSyncTest(distance);
+                    char skipEnv[8] = { 0 };
+                    if (GetEnvironmentVariableA("SF4E_SKIP_RESET", skipEnv, sizeof(skipEnv)) > 0 && skipEnv[0] != '0') {
+                        // Controlled comparison: RestoreAllFromInternalMementos
+                        // normally calls Chara::Actor::ResetAfterMemento, which
+                        // RECOMPUTES derived state. Skipping it separates "the
+                        // saved bytes are incomplete" from "the recomputation
+                        // does not reproduce what was saved".
+                        sf4e::Game::Battle::System::bSkipResetAfterMemento = true;
+                        spdlog::warn("SF4E_SKIP_RESET is set: ResetAfterMemento will NOT run on restore. "
+                            "Diagnostic only - do not play online like this.");
+                    }
+                    char soakEnv[8] = { 0 };
+                    if (GetEnvironmentVariableA("SF4E_SYNCTEST_SOAK", soakEnv, sizeof(soakEnv)) > 0 && soakEnv[0] != '0') {
+                        sf4e::Game::Battle::System::syncTest.bSoak = true;
+                        spdlog::warn("SOAK MODE: both sides play themselves with random inputs, a random "
+                            "pairing every match, and the test re-arms itself. Start one VS match and leave it.");
+                    }
+                    spdlog::warn("SF4E_SYNCTEST is set: start VERSUS > player vs player and play a minute. "
+                        "Results are written to this log when the match ends.");
+                }
+            }
             if (sf4e::bSoakTest) {
                 spdlog::warn("=== SOAK TEST BUILD: automated endless matches. The pad is overridden; not for normal play. ===");
             }

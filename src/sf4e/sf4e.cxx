@@ -1,6 +1,7 @@
 #include <random>
 #include <time.h>
 #include <windows.h>
+#include <spdlog/spdlog.h>
 #include <bcrypt.h>
 
 #include "../Dimps/Dimps__Eva.hxx"
@@ -232,7 +233,18 @@ void sf4e::Install(HINSTANCE hinstDll, const sf4e::Payload* const payload) {
 		MessageBox(NULL, TEXT("Could not hash sidecar!"), NULL, MB_OK);
 	}
 
+	// A fixed seed makes a soak run REPEATABLE: identical characters, stage and
+	// inputs every time. Without it two runs are different fights, and comparing
+	// "16 divergences" against "39" says nothing about the change under test.
+	char seedEnv[16] = { 0 };
+	if (GetEnvironmentVariableA("SF4E_SOAK_SEED", seedEnv, sizeof(seedEnv)) > 0) {
+		unsigned int seed = (unsigned int)strtoul(seedEnv, nullptr, 10);
+		localRand.seed(seed);
+		spdlog::warn("SF4E_SOAK_SEED={}: this run is repeatable - same characters, stage and inputs", seed);
+	}
+	else {
 	localRand.seed(time(NULL));
+	}
 
 	Crash::Install();
 	Event::Install();

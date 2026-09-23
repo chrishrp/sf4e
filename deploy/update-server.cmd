@@ -25,7 +25,7 @@ echo [2/3] Restarting the server
 tasklist /fi "IMAGENAME eq LobbyServer.exe" | find /i "LobbyServer.exe" >nul
 if errorlevel 1 (
   echo       it was not running; starting it
-  schtasks /run /tn "sf4e lobby server" >nul 2>&1 || start "" run-server.cmd
+  start "" run-server.cmd
 ) else (
   taskkill /f /im LobbyServer.exe >nul
   echo       stopped the old one; run-server.cmd restarts the new one in 5 seconds
@@ -39,8 +39,5 @@ if errorlevel 1 (
 ) else (
   echo       running.
 )
-echo.
-echo If your router forwards specific ports rather than using DMZ, add
-echo UDP 25001-25080 to it as well.
 echo.
 pause

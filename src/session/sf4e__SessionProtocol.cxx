@@ -31,6 +31,28 @@ namespace sf4e {
 			{}
 		};
 
+		bool CharaConditionsValid(const CharaConditions& c) {
+			return c.charaID < CHARA_COUNT
+				&& c.costume < COSTUME_COUNT
+				&& c.color < COLOR_COUNT
+				&& c.ultraCombo < ULTRA_COUNT
+				&& c.handicap == 0;
+		}
+
+		bool StageIDValid(int64_t stageID) {
+			return stageID >= 0 && stageID < STAGE_COUNT;
+		}
+
+		bool SanitizeCharaConditions(CharaConditions& c) {
+			bool changed = false;
+			if (c.charaID >= CHARA_COUNT) { c.charaID = 0; changed = true; }
+			if (c.costume >= COSTUME_COUNT) { c.costume = 0; changed = true; }
+			if (c.color >= COLOR_COUNT) { c.color = 0; changed = true; }
+			if (c.ultraCombo >= ULTRA_COUNT) { c.ultraCombo = 0; changed = true; }
+			if (c.handicap != 0) { c.handicap = 0; changed = true; }
+			return changed;
+		}
+
 		MatchData::MatchData()
 		{
 			Clear();
@@ -117,6 +139,20 @@ namespace sf4e {
 				out = "(the compared fields all match; the drift is in state the snapshot does not cover)";
 			}
 			return out;
+		}
+
+		// Did the two machines disagree about WHERE IN THE MATCH they are,
+		// rather than about what happened in it? This never ends a match on its
+		// own -- only gameplay state does that -- but it separates the two
+		// causes in the log, and they need completely different fixes.
+		//
+		// A peer running the game at a different frame-rate setting advances
+		// the battle flow by a different amount per frame, so it diverges here
+		// first while both characters still agree. That is the single most
+		// common desync players hit, and until now the report could not say so.
+		bool SnapshotFlowDiffers(const StateSnapshot& a, const StateSnapshot& b) {
+			return a.battleFlow != b.battleFlow
+				|| a.battleFlowSubstate != b.battleFlowSubstate;
 		}
 
 		bool SnapshotGameplayDiffers(const StateSnapshot& a, const StateSnapshot& b) {

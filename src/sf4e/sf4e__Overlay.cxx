@@ -189,22 +189,35 @@ const char* GetRoundTimeLabel(void* options, int idx) {
 }
 
 void Overlay::OnClientError(SessionClient::ErrorType errType, SessionClient* const client, const SessionClient::Callbacks& callbacks) {
+	// Two audiences: the debug overlay's network window, and the lobby the
+	// player is actually looking at. Only the first existed, so a refused join
+	// showed the player nothing at all -- they sat on a connecting screen that
+	// was never going to finish and concluded the mod was broken.
+	const char* playerMsg = nullptr;
 	switch (errType) {
 	case SessionClient::ErrorType::SCE_JOIN_REJECTED_HASH_INVALID:
 		clientAlerts.push_back("Could not join lobby: version mismatch");
+		playerMsg = "Different versions. Both players need the same build - get the latest release.";
 		break;
 	case SessionClient::ErrorType::SCE_JOIN_REJECTED_LOBBY_FULL:
 		clientAlerts.push_back("Could not join lobby: lobby full");
+		playerMsg = "That lobby is full.";
 		break;
 	case SessionClient::ErrorType::SCE_JOIN_REJECTED_NAME_TAKEN:
 		clientAlerts.push_back("Could not join lobby: name taken");
+		playerMsg = "Someone in that lobby is already using your name.";
 		break;
 	case SessionClient::ErrorType::SCE_JOIN_REJECTED_REQUEST_INVALID:
 		clientAlerts.push_back("Could not join lobby: join request incorrectly formatted- version mismatch?");
+		playerMsg = "The server did not understand the request. Both players need the same build.";
 		break;
 	default:
 		clientAlerts.push_back("An unknown error occurred");
+		playerMsg = "Could not join that lobby.";
 		break;
+	}
+	if (playerMsg != nullptr) {
+		sf4e::Lobby::OnJoinFailed(playerMsg);
 	}
 	show_network_window = true;
 }
@@ -770,7 +783,10 @@ void DrawGGPOStatsOverlay(GGPOSession* ggpo, fSystem::PlayerConnectionInfo* play
 			return;
 		}
 
-		Columns(8);
+		// A column rather than a banner above the table: as its own line it
+		// pushed the numbers people actually read -- RTT, RBF -- out of view.
+		Columns(9);
+		Text("LINK"); NextColumn();
 		Text("RTT ms"); NextColumn();
 		Text("kbps"); NextColumn();
 		Text("recv"); NextColumn();
@@ -780,6 +796,13 @@ void DrawGGPOStatsOverlay(GGPOSession* ggpo, fSystem::PlayerConnectionInfo* play
 		Text("len(PndSnaps)"); NextColumn();
 		Text("len(snapMap)"); NextColumn();
 
+		if (fUserApp::netplay && fUserApp::netplay->client.IsMatchDirect()) {
+			ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "P2P");
+		}
+		else {
+			ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.4f, 1.0f), "RELAY");
+		}
+		NextColumn();
 		Text("%d", stats.network.ping); NextColumn();
 		Text("%d", stats.network.kbps_sent);  NextColumn();
 		Text("%d", stats.network.recv_queue_len);  NextColumn();
@@ -2285,7 +2308,87 @@ void Overlay::InitializeOverlay(HWND hWnd, IDirect3DDevice9* lpDevice) {
 	g_overlayReady = true;
 }
 
+// Start the next sync-test soak match.
+//
+// The soak used to keep the battle open between matches, which skipped the
+// game's own teardown and faulted on the next one. Closing it properly fixed
+// that but sends the game back to the main menu, where nothing was driving it
+// -- so a run did exactly one match either way. This walks the same path the
+// "Go to versus mode" button does, once, as soon as the menu is up.
+static void PumpSyncTestSoakRestart() {
+	if (!fSystem::bSoakRestartPending) {
+		return;
+	}
+
+	RootEvent* root = App::GetRootEvent();
+	char* mainMenuQuery[1] = { "MainMenu" };
+	rMainMenu* mainMenu = (rMainMenu*)EventBaseWithEC::FindForegroundEvent(root, mainMenuQuery, 1);
+	if (!mainMenu) {
+		// Still unwinding the last battle. Try again next frame -- but say so
+		// if it never arrives. The game hands out colours and titles for
+		// playing, and a soak plays hundreds of matches, so sooner or later an
+		// unlock notification sits on the menu waiting for a button press that
+		// nobody is there to give it. That stalls forever and looks identical
+		// to a run still in progress, which is the worst way for it to fail.
+		static int waited = 0;
+		if (++waited % 600 == 0) {
+			spdlog::warn("Sync test soak: waiting for the main menu ({} seconds). If the game is "
+				"showing an unlock or confirmation prompt, it needs a button press to continue.",
+				waited / 60);
+		}
+		return;
+	}
+	fSystem::bSoakRestartPending = false;
+
+	ProgressData* progressData = *RootEvent::GetProgressData(root);
+	ProgressData::BattleTypeSettings* settings =
+		&(ProgressData::GetBattleTypeSettings(progressData)[ProgressData::NBT_PVP]);
+	*ProgressData::GetNextBattleType(progressData) = ProgressData::NBT_PVP;
+	// Seven rounds rather than three. Every gameplay divergence so far has been
+	// at a round reset, so rounds per match is the thing worth maximising --
+	// more transitions per match beats more matches, and costs no menu work.
+	settings->rounds = 7;
+	// Edition select off: an edition the profile does not own is rejected at
+	// match start the same way an unowned costume is.
+	settings->editionSelect = 0;
+
+	fVsPreBattle::bSkipToVersus = true;
+
+	// Skipping character select means SOMETHING has to choose the fighters,
+	// and it has to happen here, at pre-battle, while the assets are still to
+	// be loaded. Leaving this callback null started the match with nothing
+	// selected and the game faulted on a null character. SyncTestPickRandom-
+	// Characters runs at BATTLE start, which is far too late to load anyone.
+	for (int i = 0; i < 2; i++) {
+		mainMenuJumpCharaConditions[i] = { 0 };
+		mainMenuJumpCharaConditions[i].charaID = (BYTE)(sf4e::localRand() % 0x2c);
+	}
+	mainMenuJumpCharaCount = 2;
+	mainMenuJumpStageID = (int)(sf4e::localRand() % 30);
+	fVsPreBattle::OnTasksRegistered = _OnPreBattleTasksRegistered;
+	// ...and tell the battle-start picker to leave them alone, so the IDs it
+	// would have rolled cannot disagree with the assets already loaded.
+	fSystem::bSoakCharasPreset = true;
+	spdlog::info("Sync test soak: next match is {} vs {} on stage {}",
+		(int)mainMenuJumpCharaConditions[0].charaID,
+		(int)mainMenuJumpCharaConditions[1].charaID, mainMenuJumpStageID);
+
+	PadSystem* padSys = Dimps::Pad::System::staticMethods.GetSingleton();
+	PadSystem::__publicMethods& padSysMethods = Dimps::Pad::System::publicMethods;
+	(padSys->*padSysMethods.AssociatePlayerAndGamepad)(0, 0);
+	(padSys->*padSysMethods.SetDeviceTypeForPlayer)(0, 1);
+	(padSys->*padSysMethods.SetSideHasAssignedController)(0, 1);
+	(padSys->*padSysMethods.AssociatePlayerAndGamepad)(1, 1);
+	(padSys->*padSysMethods.SetDeviceTypeForPlayer)(1, 1);
+	(padSys->*padSysMethods.SetSideHasAssignedController)(1, 1);
+	(padSys->*padSysMethods.SetActiveButtonMapping)(PadSystem::BUTTON_MAPPING_FIGHT);
+
+	spdlog::info("Sync test soak: starting the next match");
+	(rMainMenu::ToItemObserver(mainMenu)->*rMainMenu::itemObserverMethods.GoToVersusMode)();
+}
+
 void Overlay::DrawOverlay() {
+	PumpSyncTestSoakRestart();
 	if (!g_overlayReady) {
 		// A reset tore the overlay down; bring it back once a device exists.
 		Dimps::Platform::D3D* d3d = Dimps::Platform::D3D::staticMethods.GetSingleton();

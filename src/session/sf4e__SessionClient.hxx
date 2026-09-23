@@ -7,6 +7,8 @@
 #include <GameNetworkingSockets/steam/steamnetworkingsockets.h>
 #include <GameNetworkingSockets/steam/isteamnetworkingutils.h>
 
+#include "sf4e__HolePunch.hxx"
+#include "sf4e__Upnp.hxx"
 #include "sf4e__SessionProtocol.hxx"
 
 namespace sf4e {
@@ -78,6 +80,49 @@ namespace sf4e {
 
 		EResult Battle_Loaded();
 
+		// Reports a match fork to the server: the frame, which fields disagreed,
+		// and the conditions it happened under. Carries no name and no address.
+		// Once per match -- a desync repeats every frame once it starts.
+		void ReportDesync(int frame, bool gameplay, bool flowDiffers, const std::string& diff);
+
+		// The live client, for code that has to reach it from a free function
+		// (the desync handler runs deep inside the battle system).
+		static SessionClient* Instance() { return s_pCallbackInstance; }
+
+
+		// --- Direct play ------------------------------------------------------
+		//
+		// On by default (lobby CONNECTION option). A direct connection means
+		// the other player's machine learns this machine's address, which the
+		// relay otherwise never reveals.
+		//
+		// EnableDirect() binds the GGPO port, asks the server what address it
+		// appears to come from, and offers that to the other player. The
+		// socket is then HELD until the match starts, which is what keeps the
+		// NAT mapping alive so the address stays true.
+		// `altServer` is any OTHER region's address, used once to work out
+		// whether this router can do peer to peer at all. Empty skips the check.
+		bool EnableDirect(const SteamNetworkingIPAddr& matchmakerAddr,
+			const SteamNetworkingIPAddr* altServer = nullptr);
+		void DisableDirect();
+		bool IsDirectEnabled() const { return _directEnabled; }
+
+		// Called just before GGPO starts. Punches if the other player also
+		// opted in, and reports whether a direct path opened. On false (the
+		// usual case behind a strict NAT) the caller simply uses the relay.
+		bool TryDirectPath();
+
+		// How the CURRENT match is actually connected. Asked often enough out
+		// loud that it belongs on screen rather than in a log file.
+		bool IsMatchDirect() const { return _matchIsDirect; }
+
+		// Call every frame while the lobby is up: keeps a proven path from
+		// expiring before the match starts. Does nothing if there is no path.
+		void PumpDirect();
+
+		// Valid only after TryDirectPath() returned true.
+		const std::string& DirectPeerIp() const { return _directPeerIp; }
+		uint16_t DirectPeerPort() const { return _directPeerPort; }
 		EResult Forward(const SessionProtocol::ConnectionID& dest, const nlohmann::json& msg);
 
 		// Public for testing
@@ -90,6 +135,30 @@ namespace sf4e {
 		std::map<int, SessionProtocol::StateSnapshot> pendingRemoteSnapshots;
 		SessionProtocol::ConnectionID _cid;
 	private:
+
+		// Opt-in direct play; see EnableDirect().
+		HolePunch _punch;
+		// Best-effort router port opening, tried once per session before the
+		// punch. Costs one discovery timeout when there is no UPnP router.
+		Upnp _upnp;
+		bool _upnpMapped = false;
+		bool _directEnabled = false;
+		std::string _directPeerIp;
+		uint16_t _directPeerPort = 0;
+		std::string _directPeerLocalIp;
+		uint16_t _directPeerLocalPort = 0;
+		std::string _directToken;
+		// One desync report per match; see ReportDesync().
+		bool _desyncReported = false;
+		// Spaced discovery attempts per lobby visit; see EnableDirect().
+		bool _matchIsDirect = false;
+		// A path proven in the lobby, kept warm until the match uses it.
+		bool _punchProven = false;
+		std::string _provenIp;
+		uint16_t _provenPort = 0;
+		unsigned long _lastKeepaliveTick = 0;
+		int _directAttempts = 0;
+		unsigned long _directLastAttemptTick = 0;
 
 		// Connection related data
 		Callbacks _callbacks;

@@ -2,7 +2,7 @@ cmake_minimum_required (VERSION 3.21)
 
 project (
     sf4e
-    VERSION 0.4.1
+    VERSION 0.5.4
     DESCRIPTION "A process-inspection and modification tool for the Steam release of Ultra Street Fighter 4."
     HOMEPAGE_URL "https://gitlab.com/adanducci/sf4e"
 )
@@ -144,6 +144,10 @@ if(WIN32)
     # system and GGPO, none of which exist on the server. The lobby server never
     # references it, so it simply is not part of a Linux build.
     list(APPEND SESSION_SOURCES
+        "src/session/sf4e__HolePunch.hxx"
+        "src/session/sf4e__HolePunch.cxx"
+        "src/session/sf4e__Upnp.hxx"
+        "src/session/sf4e__Upnp.cxx"
         "src/session/sf4e__SessionClient.hxx"
         "src/session/sf4e__SessionClient.cxx"
     )

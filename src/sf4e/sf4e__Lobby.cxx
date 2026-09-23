@@ -9,6 +9,9 @@
 #include <windows.h>
 #include <Xinput.h>
 #include <shellapi.h>
+#include <shlobj.h>
+#include <shlwapi.h>
+#include <knownfolders.h>
 
 #include <imgui.h>
 #include <spdlog/spdlog.h>
@@ -84,11 +87,21 @@ namespace {
 	char g_name[32] = { 0 };
 	uint8_t g_deviceIdx = 0xff;
 	uint8_t g_deviceType = 0xff;
+	// Zero delay means every remote frame is a prediction, so at any real ping
+	// the game rolls back constantly -- measured at 90 ms, the opponent sits 5-6
+	// frames behind and every one of those is re-simulated. One frame is the
+	// floor: it costs 16 ms and removes a whole class of avoidable rollback.
+	const int MIN_DELAY = 1;
+	const int MAX_DELAY = 8;
 	int g_delay = 2;
 	uint16_t g_localGgpoPort = 23457;
 
 	int g_homeCursor = 0;
-	const int HOME_ITEMS = 5;
+	const int HOME_ITEMS = 6;
+
+	// Peer-to-peer by default, with the server relay as the fallback both when
+	// the player chooses it and whenever a direct path cannot be opened.
+	bool g_directOptIn = true;
 
 	// Selectable lobby servers. The launcher hands us either a single address
 	// (from --server or server.txt) or a baked "Name=addr;Name=addr" list, so a
@@ -101,6 +114,62 @@ namespace {
 	};
 	std::vector<ServerEntry> g_servers;
 	int g_serverIdx = 0;
+
+	// ------------------------------------------------------------- settings
+	// Delay, server and connection mode used to reset to their defaults on
+	// every launch, so a player had to set them again each time -- and a
+	// tester who set DIRECT, updated the build and relaunched silently went
+	// back to VIA SERVER without anything saying so. Plain key=value next to
+	// the logs; anything unreadable just leaves the defaults in place.
+	void SettingsPath(wchar_t* out) {
+		PWSTR appdata = nullptr;
+		out[0] = 0;
+		if (SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, NULL, &appdata) != S_OK) {
+			return;
+		}
+		PathCombineW(out, appdata, L"sf4e\\settings.txt");
+		CoTaskMemFree(appdata);
+	}
+
+	// Pinned by SF4E_DELAY. A two-machine test needs both sides on a known,
+	// identical delay, and the saved setting silently carries over whatever was
+	// last chosen on that PC -- which is exactly the ambiguity to remove.
+	int g_delayOverride = -1;
+
+	void LoadSettings() {
+		wchar_t path[MAX_PATH];
+		SettingsPath(path);
+		if (path[0] == 0) return;
+		FILE* f = _wfopen(path, L"r");
+		if (f == nullptr) return;
+		char line[256];
+		while (fgets(line, sizeof(line), f)) {
+			int v = 0;
+			// A settings file written before the floor existed can hold 0; clamp it
+			// up rather than rejecting the line, so the rest of the file still loads.
+			if (sscanf_s(line, "delay=%d", &v) == 1 && v >= 0 && v <= MAX_DELAY) {
+				g_delay = v < MIN_DELAY ? MIN_DELAY : v;
+			}
+			else if (sscanf_s(line, "server=%d", &v) == 1 && v >= 0) g_serverIdx = v;
+			else if (sscanf_s(line, "direct=%d", &v) == 1) g_directOptIn = (v != 0);
+		}
+		fclose(f);
+		// The saved index may point past a shorter server list on this build.
+		if (g_serverIdx >= (int)g_servers.size()) g_serverIdx = 0;
+		if (g_delayOverride >= 0) {
+			g_delay = g_delayOverride;
+		}
+	}
+
+	void SaveSettings() {
+		wchar_t path[MAX_PATH];
+		SettingsPath(path);
+		if (path[0] == 0) return;
+		FILE* f = _wfopen(path, L"w");
+		if (f == nullptr) return;
+		fprintf(f, "delay=%d\nserver=%d\ndirect=%d\n", g_delay, g_serverIdx, g_directOptIn ? 1 : 0);
+		fclose(f);
+	}
 
 	void ParseServerList(const char* spec) {
 		g_servers.clear();
@@ -170,6 +239,11 @@ namespace {
 	int g_actionCursor = 0;
 	rVsMode::ConfirmedCharaConditions g_cond = { 0, 0, 0, 0, 0, 0, 0, 0, (BYTE)rBattle::ED_USF4 };
 	int g_stage = 0;
+	// Until the player actually picks a stage, mirror whatever the match is
+	// already set to. Without this the winner of a rematch -- who was P2, could
+	// not touch the stage, and so still held the initial 0 -- was promoted to P1
+	// and sent stage 0, dumping every rematch into the training stage.
+	bool g_stagePicked = false;
 	bool g_sentReady = false;
 	// Soak test: earliest tick at which the automatic ready-up may fire, used to
 	// let the server settle the previous match's result first.
@@ -412,6 +486,7 @@ namespace {
 			if (!GetUserNameA(g_name, &len)) strcpy_s(g_name, "Player");
 		}
 		ParseServerList(sf4e::args.szServer);
+		LoadSettings();
 		if (!g_servers.empty()) g_mm.Configure(g_servers[g_serverIdx].addr.c_str());
 		spdlog::info("Lobby: playing as {} ({})", g_name, sf4e::args.szName[0] ? "Steam persona" : "Windows user name");
 	}
@@ -474,6 +549,13 @@ namespace {
 
 	void ConnectFromMatchmaker() {
 		std::string addr = g_mm.SessionAddress();
+		// Name the region and delay in the log. Both players must be on the same
+		// server or the relay path runs the long way round, and with two logs and
+		// no record of which was chosen that is impossible to check after the fact.
+		spdlog::info("Joining via {} server, input delay {} frames",
+			(g_serverIdx >= 0 && g_serverIdx < (int)g_servers.size())
+				? g_servers[g_serverIdx].name.c_str() : "unknown",
+			g_delay);
 		std::vector<char> buf(addr.begin(), addr.end());
 		buf.push_back(0);
 		fUserApp::StartSession(buf.data(), g_localGgpoPort, sf4e::sidecarHash, std::string(g_name), g_deviceType, g_deviceIdx, (uint8_t)g_delay, g_spectate);
@@ -512,6 +594,21 @@ namespace {
 	void SendReady() {
 		if (!fUserApp::netplay || g_sentReady) return;
 		sf4e::SessionClient& c = fUserApp::netplay->client;
+		if (sf4e::bSoakTest) {
+			// A fresh pairing and stage every match, so a long unattended run
+			// covers the roster and the stages rather than repeating one fight.
+			g_cond.charaID = (BYTE)(sf4e::localRand() % CHARA_COUNT);
+			g_cond.costume = 0;
+			g_cond.color = 0;
+			CycleEdition(0);
+			g_stage = (int)(sf4e::localRand() % 30);
+			// Only side 0 actually sets the stage; side 1 must keep mirroring
+			// what it is told, or its own pick sticks in the UI and the two
+			// logs disagree about a stage they are in fact both playing.
+			g_stagePicked = (MySide() == 0);
+			spdlog::info("Net soak: playing character {} (stage {} {})", (int)g_cond.charaID, g_stage,
+				MySide() == 0 ? "- ours, and the one both PCs load" : "- our proposal only; side 0 picks");
+		}
 		if (c.PreBattle_SetChara(g_cond) != k_EResultOK) { Flash("Could not send your character"); return; }
 		if (MySide() == 0) {
 			c.PreBattle_SetEnv(sf4e::localRand());
@@ -614,7 +711,9 @@ namespace {
 		else {
 			snprintf(serverLabel, sizeof(serverLabel), "SERVER      none");
 		}
-		const char* items[HOME_ITEMS] = { "CREATE LOBBY", "JOIN WITH CODE", serverLabel, delayLabel, "BACK TO GAME" };
+		char connLabel[64];
+		snprintf(connLabel, sizeof(connLabel), "CONNECTION   <  %s  >", g_directOptIn ? "PEER TO PEER" : "SERVER RELAY");
+		const char* items[HOME_ITEMS] = { "CREATE LOBBY", "JOIN WITH CODE", serverLabel, delayLabel, connLabel, "BACK TO GAME" };
 		float y = ds.y * 0.36f;
 		for (int i = 0; i < HOME_ITEMS; i++) {
 			bool sel = i == g_homeCursor;
@@ -633,7 +732,7 @@ namespace {
 				"Both players must choose the SAME server.");
 		}
 		dl->AddText(g_fontSmall, 20, ImVec2(80, y + 10), PAPER_DIM, ("Playing as " + std::string(g_name)).c_str());
-		DrawHint(dl, ds, "Up/Down: choose     A: confirm     Left/Right: change server | delay     B: back to game");
+		DrawHint(dl, ds, "Up/Down: choose     A: confirm     Left/Right: change server | delay | connection     B: back to game");
 
 		if (in.up) g_homeCursor = (g_homeCursor + HOME_ITEMS - 1) % HOME_ITEMS;
 		if (in.down) g_homeCursor = (g_homeCursor + 1) % HOME_ITEMS;
@@ -650,11 +749,25 @@ namespace {
 				g_serverStatus = -1;
 				g_mm.Configure(g_servers[g_serverIdx].addr.c_str());
 				spdlog::info("Lobby: server switched to {}", g_servers[g_serverIdx].name);
+				SaveSettings();
 			}
 		}
 		if (g_homeCursor == 3) {
-			if (in.left && g_delay > 0) g_delay--;
-			if (in.right && g_delay < 8) g_delay++;
+			if (in.left && g_delay > MIN_DELAY) g_delay--;
+			if (in.right && g_delay < MAX_DELAY) g_delay++;
+			if (in.left || in.right) SaveSettings();
+		}
+		if (g_homeCursor == 4 && (in.left || in.right)) {
+			g_directOptIn = !g_directOptIn;
+			// Flip it back off the moment it is turned off mid-session, so a
+			// player who changes their mind is not left offering an address.
+			if (!g_directOptIn && fUserApp::netplay) {
+				fUserApp::netplay->client.DisableDirect();
+			}
+			Flash(g_directOptIn
+				? "Peer to peer: lower ping. Your opponent sees your IP address and the game port is opened on your router"
+				: "Server relay: all traffic goes through the server; your IP address stays private", true);
+			SaveSettings();
 		}
 		if (in.back) { sf4e::Lobby::Close(); return; }
 		if (in.confirm) {
@@ -671,7 +784,7 @@ namespace {
 				g_code.clear(); g_joinCursor = 0; g_isCreator = false;
 				g_screen = SC_JOIN;
 				break;
-			case 4:
+			case 5:
 				sf4e::Lobby::Close();
 				break;
 			}
@@ -905,6 +1018,32 @@ namespace {
 		int side = MySide();
 		bool connected = !c._lobbyData.members.empty();
 		std::string code = g_mm.code;
+		// Offer a peer-to-peer path once on entering the lobby. The other
+		// region's address comes along so we can work out, in one extra round
+		// trip, whether this router is capable of it at all.
+		if (g_directOptIn && connected && !c.IsDirectEnabled()) {
+			sf4e::Matchmaker altMm;
+			SteamNetworkingIPAddr alt;
+			alt.Clear();
+			bool haveAlt = false;
+			for (size_t i = 0; i < g_servers.size(); i++) {
+				if ((int)i == g_serverIdx) continue;
+				if (altMm.Configure(g_servers[i].addr.c_str())) {
+					alt = altMm.serverAddr;
+					haveAlt = true;
+					break;
+				}
+			}
+			c.EnableDirect(g_mm.serverAddr, haveAlt ? &alt : nullptr);
+		}
+		// Keeps a proven path from expiring while the lobby waits.
+		c.PumpDirect();
+
+		// Carry the current stage forward until this player chooses one, so a
+		// promoted winner inherits it instead of resetting the rematch to 0.
+		if (!g_stagePicked && c._matchData.stageID >= 0 && c._matchData.stageID < 30) {
+			g_stage = c._matchData.stageID;
+		}
 
 		DrawHeader(dl, ds, "LOBBY", nullptr);
 		// The code, large and gold, where the creator's eye lands first.
@@ -954,7 +1093,8 @@ namespace {
 		snprintf(color, sizeof(color), "COLOR %d", g_cond.color + 1);
 		snprintf(ultra, sizeof(ultra), "ULTRA %s", g_cond.ultraCombo == 0 ? "I" : g_cond.ultraCombo == 1 ? "II" : "W");
 		snprintf(edition, sizeof(edition), "%s", EditionLabel(g_cond.unc_edition));
-		snprintf(stage, sizeof(stage), "STAGE: %s", (side == 0 && Dimps::stageNames[g_stage]) ? Dimps::stageNames[g_stage] : "opponent picks");
+		snprintf(stage, sizeof(stage), "STAGE: %s%s", Dimps::stageNames[g_stage] ? Dimps::stageNames[g_stage] : "?",
+			side == 0 ? "" : "  (applies when you are P1)");
 		const char* opts[5] = { costume, color, ultra, edition, stage };
 		int nOpts = 5;
 		float ox = 60;
@@ -1015,7 +1155,10 @@ namespace {
 				case 1: g_cond.color = (BYTE)((g_cond.color + 10 + d) % 10); break;
 				case 2: g_cond.ultraCombo = (BYTE)((g_cond.ultraCombo + 3 + d) % 3); break;
 				case 3: CycleEdition(d); break;
-				case 4: if (side == 0) g_stage = (g_stage + 30 + d) % 30; break;
+				// Either player may choose. Only seat 0's choice is sent, but P2
+				// keeps theirs and it takes effect the moment they win and are
+				// promoted -- instead of silently reverting to stage 0.
+				case 4: g_stage = (g_stage + 30 + d) % 30; g_stagePicked = true; break;
 				}
 			}
 		}
@@ -1096,6 +1239,19 @@ void sf4e::Lobby::Close() {
 }
 
 bool sf4e::Lobby::IsOpen() { return g_open; }
+
+void sf4e::Lobby::OnJoinFailed(const char* reason) {
+	// Straight back to the menu with the reason on screen. Leaving the player
+	// on a connecting screen that will never finish is the worst option
+	// available, and it is exactly what happened before.
+	g_error = reason;
+	g_errorUntil = GetTickCount64() + 9000;
+	if (g_screen == SC_CONNECTING || g_screen == SC_JOIN) {
+		g_screen = SC_HOME;
+	}
+	g_mm.Cancel();
+	spdlog::info("Lobby: join failed - {}", reason);
+}
 
 void sf4e::Lobby::OnMatchResult(int winnerSide, int charaP1, int charaP2) {
 	if (!g_open || !fUserApp::netplay) return;
@@ -1226,4 +1382,15 @@ void sf4e::Lobby::Draw() {
 	DrawError(dl, ds);
 	dl->AddText(g_fontSmall, 16, ImVec2(ds.x - 200, 8), IM_COL32(255, 255, 255, 90), "sf4e rollback  test");
 	ImGui::End();
+}
+
+void sf4e::Lobby::SetInputDelayOverride(int frames) {
+	if (frames < MIN_DELAY || frames > MAX_DELAY) {
+		spdlog::warn("SF4E_DELAY={} is out of range ({}-{}); leaving the delay alone.",
+			frames, MIN_DELAY, MAX_DELAY);
+		return;
+	}
+	g_delayOverride = frames;
+	g_delay = frames;
+	spdlog::warn("Input delay pinned to {} frames by SF4E_DELAY; the saved setting is ignored.", frames);
 }

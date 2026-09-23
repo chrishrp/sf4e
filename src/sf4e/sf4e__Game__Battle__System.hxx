@@ -47,15 +47,43 @@ namespace sf4e {
 				struct PlayerConnectionInfo {
 					GGPOPlayerType       type;
 					GGPOPlayerHandle     handle;
+
+					// Connection quality accumulated over the current logging
+					// window. Sampling one frame in six hundred hid the spikes
+					// players were watching on screen the whole time.
+					int pingMin = 0x7fffffff;
+					int pingMax = 0;
+					long long pingSum = 0;
+					int pingSamples = 0;
+					int pingOver100 = 0;
+					int remoteBehindMax = 0;
+					// Outages are what players call freezes, and no ping figure can
+					// show them: during one there is nothing to measure.
+					int outages = 0;
+					unsigned long outageMsTotal = 0;
+					void ResetStatsWindow() {
+						pingMin = 0x7fffffff; pingMax = 0; pingSum = 0;
+						pingSamples = 0; pingOver100 = 0; remoteBehindMax = 0;
+						outages = 0; outageMsTotal = 0;
+					}
 				};
 
 				static bool bHaltAfterNext;
 				static bool bUpdateAllowed;
 				static int nExtraFramesToSimulate;
+
+				// GGPO broke one of its own invariants and the match was torn
+				// down because of it. Read by the lobby to tell the player why.
+				static bool bGgpoAssertAbort;
 				// Frames GGPO asked us to wait so the opponent catches up.
 				static int nFramesToSkip;
 				static int nNextBattleStartFlowTarget;
 				static int nRandomizeLocalInputsEveryXFramesInGGPO;
+
+				// Hold the simulation at round transitions until inputs confirm, so
+				// no rollback can span a round reset. See the implementation.
+				static bool bRoundCheckpoint;
+				static int nCheckpointHeldFrames;
 
 				static bool extendedLoadRequest;
 				static bool extendedSaveRequest;
@@ -150,6 +178,14 @@ namespace sf4e {
 					bool bArmed = false;
 					bool bActive = false;
 					bool bDumpOnMismatch = true;
+					// Unattended soak: both sides fed random inputs, a fresh random
+					// pairing every match, and re-armed when a match ends. Left
+					// running it builds the volume of evidence a single hand-played
+					// match cannot.
+					bool bSoak = false;
+					int nMatchesRun = 0;
+					int nTotalFramesVerified = 0;
+					int nTotalGameplayMismatches = 0;
 					int nCheckDistance = 1;
 					int nFramesVerified = 0;
 					int nMismatches = 0;
@@ -177,6 +213,7 @@ namespace sf4e {
 				static void ArmSyncTest(int checkDistance);
 				static void DisarmSyncTest();
 				static void StartSyncTest();
+				static void SyncTestPickRandomCharacters();
 				static void SyncTestVerify(int frame, SaveState* state);
 
 				// Saves the state, restores it immediately, and saves again. No
@@ -185,6 +222,27 @@ namespace sf4e {
 				// broken save/load from a simulation that reads state we never
 				// captured. Runs inside the battle update, not the render pass.
 				static bool idempotenceCheckRequest;
+				// Run the round-trip check every N battle frames (SF4E_IDEM_EVERY),
+				// offline only. 0 disables.
+				// Set when a sync-test soak match ends: the battle has closed and
+				// the game is heading back to the menu, so something on the menu
+				// side has to start the next one.
+				static bool bSoakRestartPending;
+				// Frames simulated with a session live but outside GGPO, because the
+				// flow was BF__IDLE. These cannot be rolled back.
+				static int nUntrackedIdleFrames;
+				// Run GGPO even while the battle flow is idle (SF4E_GGPO_IDLE), so
+				// round transitions land inside the rollback timeline.
+				static bool bGgpoDuringIdle;
+				// Set once a match has advanced past the pre-battle idle period, so
+				// later idle frames can be told apart from "no battle yet".
+				static bool bMatchLeftIdle;
+				// Idle frames that ran inside the rollback timeline this match. Must
+				// agree between two machines or their timelines differ in length.
+				static int nIdleFramesInTimeline;
+				static bool bSoakCharasPreset;
+				static int nIdemEveryFrames;
+				static int nIdemCounter;
 				static void RunIdempotenceCheck();
 
 				// RestoreAllFromInternalMementos calls Chara::Actor's

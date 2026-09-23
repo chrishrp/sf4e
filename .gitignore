@@ -9,3 +9,6 @@
 
 # Code-signing certificate and its password must never be committed.
 /deploy/codesign.pfx
+/deploy/server.private*
+/deploy/testing/
+/*.zip

@@ -24,6 +24,14 @@ namespace sf4e {
 		// Draw and process input for this frame. Safe to call every frame.
 		void Draw();
 
+		// A join was refused by the server. The lobby shows the reason and
+		// returns the player to the menu -- until now this only reached the
+		// debug overlay, so a refused join looked like nothing happening at all.
+		// Force the input delay regardless of the saved setting (SF4E_DELAY).
+		void SetInputDelayOverride(int frames);
+
+		void OnJoinFailed(const char* reason);
+
 		// Called by the battle system when an online match ends. `winnerSide`
 		// is 0 or 1, or -1 for a draw. The lobby shows a results screen with
 		// rematch / change character / leave when the game returns to the

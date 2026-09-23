@@ -53,6 +53,17 @@ namespace sf4e {
 			winQuote, ultraCombo, handicap, unc_edition);
 #endif
 
+		// Bounds for values the game uses as table indexes; they come from the
+		// other player, so the server rejects and the client sanitizes.
+		const int CHARA_COUNT = 0x2c;
+		const int STAGE_COUNT = 30;
+		const int COSTUME_COUNT = 8;
+		const int COLOR_COUNT = 10;
+		const int ULTRA_COUNT = 3;
+		bool CharaConditionsValid(const CharaConditions& c);
+		bool StageIDValid(int64_t stageID);
+		bool SanitizeCharaConditions(CharaConditions& c);
+
 		// Connection IDs are ephemeral and reusable- they can be used to
 		// distinguish clients from each other, but should not be used as
 		// any kind of stable identifier. "user" in this context is _not_
@@ -149,6 +160,19 @@ namespace sf4e {
 			MT_BATTLE_SYNCED,
 			MT_BATTLE_SNAPSHOT,
 
+			// Opt-in direct play. The offer carries the sender's own public
+			// endpoint; the server hands each player the other's ONLY once both
+			// have opted in, and never puts it in the broadcast lobby data
+			// (which spectators also receive).
+			MT_DIRECT_OFFER,
+			MT_DIRECT_PEER,
+
+			// A match forked. Sent so a desync anywhere in the world lands in
+			// the server log with its evidence attached, instead of depending on
+			// a player volunteering their log file -- which is exactly what we
+			// could not get from the one report that mattered most.
+			MT_DESYNC_REPORT,
+
 			MT_FORWARD,
 		};
 
@@ -170,6 +194,10 @@ namespace sf4e {
 			{MT_BATTLE_LOADED, "battle_loaded"},
 			{MT_BATTLE_SYNCED, "battle_synced"},
 			{MT_BATTLE_SNAPSHOT, "battle_snapshot"},
+
+			{MT_DIRECT_OFFER, "direct_offer"},
+			{MT_DIRECT_PEER, "direct_peer"},
+			{MT_DESYNC_REPORT, "desync_report"},
 
 			{MT_FORWARD, "forward"},
 		})
@@ -241,6 +269,49 @@ namespace sf4e {
 			MessageType type = MT_PREBATTLE_SETCHARA;
 			CharaConditions chara;
 		};
+		// Sent by a player who has turned direct play on, carrying the public
+		// endpoint their own GGPO socket appears to come from.
+		struct DirectOffer {
+			MessageType type = MT_DIRECT_OFFER;
+			std::string ip;
+			uint16_t port = 0;
+			// The address on the sender's own network. Two players behind the
+			// same router cannot generally reach each other at their shared
+			// public address -- that needs hairpin NAT, which many routers do
+			// not do -- but they can always reach each other directly on the
+			// LAN. Every real P2P stack gathers both for this reason.
+			std::string localIp;
+			uint16_t localPort = 0;
+		};
+
+		// The other player's endpoint, sent to each of the two players alone
+		// and only when both have offered. An empty ip means "the other side did
+		// not opt in" -- stay on the relay.
+		struct DesyncReport {
+			MessageType type = MT_DESYNC_REPORT;
+			int32_t frame = 0;
+			// Did the authoritative state fork, or was it only cosmetic drift?
+			bool gameplay = false;
+			// Were the two machines at different points in the match? Separates
+			// a timing problem from a simulation one; they need different fixes.
+			bool flowDiffers = false;
+			// The conditions the fork happened under.
+			int32_t inputDelay = -1;
+			bool direct = false;
+			int32_t pingMs = -1;
+			// Which fields disagreed, truncated. No names, no addresses.
+			std::string diff;
+		};
+
+		struct DirectPeer {
+			MessageType type = MT_DIRECT_PEER;
+			std::string ip;
+			uint16_t port = 0;
+			std::string localIp;
+			uint16_t localPort = 0;
+			std::string token;
+		};
+
 
 		struct PreBattleSetStage {
 			MessageType type = MT_PREBATTLE_SETSTAGE;
@@ -343,6 +414,9 @@ namespace sf4e {
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(LobbyReportResults, type, loserSide);
 
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(PreBattleSetChara, type, chara);
+		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(DirectOffer, type, ip, port, localIp, localPort);
+		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(DesyncReport, type, frame, gameplay, flowDiffers, inputDelay, direct, pingMs, diff);
+		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(DirectPeer, type, ip, port, localIp, localPort, token);
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(PreBattleSetEnv, type, rngSeed);
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(PreBattleSetStage, type, stageID);
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ForwardMessage, type, src, dest, msg);
@@ -363,6 +437,11 @@ namespace sf4e {
 		// have genuinely forked and the match cannot continue; a position-only
 		// difference is drift that has not (yet) changed the outcome.
 		bool SnapshotGameplayDiffers(const StateSnapshot& a, const StateSnapshot& b);
+
+		// True when the two machines disagree about where in the match they
+		// are (battle flow), as opposed to what happened in it. Never ends a
+		// match by itself; it classifies the cause. See the implementation.
+		bool SnapshotFlowDiffers(const StateSnapshot& a, const StateSnapshot& b);
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(BattleLoaded, type);
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(BattleSynced, type);
 	}

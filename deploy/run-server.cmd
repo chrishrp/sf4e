@@ -20,11 +20,6 @@ if errorlevel 1 (
   netsh advfirewall firewall add rule name="sf4e lobby" dir=in action=allow protocol=UDP localport=23400-23420,24001-24020,25001-25080 >nul 2>&1
 )
 
-REM Keep the machine awake for as long as the server runs. This matters on
-REM modern laptops whose "modern standby" ignores the classic sleep timeouts.
-REM The helper exits on its own when this process ends.
-if exist "%~dp0keepawake.ps1" start "" /b powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%~dp0keepawake.ps1"
-
 :run
 echo Starting sf4e lobby server (%date% %time%). Close this window to stop it.
 LobbyServer.exe

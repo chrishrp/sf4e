@@ -98,6 +98,12 @@ namespace {
 	// Forwards packets between the first two endpoints that talk to it. Both
 	// games are told the other player lives at this port, so GGPO on each side
 	// sees the relay as its peer and never learns the other's real address.
+	// A short, fixed probe a client sends from its GGPO socket to ask "what
+	// address do you see me at?". Nine bytes, compared before anything else, so
+	// a real match packet can never be mistaken for one.
+	static const char STUN_PROBE[] = "SF4ESTUN1";
+	static const size_t STUN_PROBE_LEN = sizeof(STUN_PROBE) - 1;
+
 	struct Relay {
 		SOCKET sock = INVALID_SOCKET;
 		uint16_t port = 0;
@@ -146,6 +152,39 @@ namespace {
 				int n = recvfrom(sock, buf, sizeof(buf), 0, (sockaddr*)&from, &fromLen);
 				if (n <= 0) {
 					break;
+				}
+
+				// An address query, answered here rather than on the matchmaker
+				// port.
+				//
+				// A player reported that peer to peer never started: his query
+				// to the matchmaker never reached the server at all, while his
+				// ordinary matchmaking AND his match traffic to this relay port
+				// both worked from the same machine. Something between him and
+				// us drops that one combination. The relay port is a path his
+				// network demonstrably allows -- it has to, or he could not
+				// play -- so ask the question where the answer can get back.
+				//
+				// Checked before a slot is taken so a query never registers as
+				// a player, and it is never forwarded to the opponent.
+				if (n == (int)STUN_PROBE_LEN && memcmp(buf, STUN_PROBE, STUN_PROBE_LEN) == 0) {
+					if (!IsAllowed(from)) {
+						// Always logged, never rate limited. These are rare -- a
+						// handful per player per lobby -- and sharing the scanner
+						// counter meant a refusal could be silently skipped, which
+						// is indistinguishable from the packet never arriving. That
+						// ambiguity is exactly what we are trying to resolve.
+						spdlog::info("relay :{} address query from {} REFUSED (not a member of this lobby)", port, Describe(from));
+						continue;
+					}
+					char ip[INET_ADDRSTRLEN] = { 0 };
+					inet_ntop(AF_INET, &from.sin_addr, ip, sizeof(ip));
+					std::string out = json{
+						{"ok", true}, {"ip", ip}, {"port", ntohs(from.sin_port)}
+					}.dump();
+					sendto(sock, out.c_str(), (int)out.size(), 0, (sockaddr*)&from, sizeof(from));
+					spdlog::info("relay :{} answered an address query from {}", port, Describe(from));
+					continue;
 				}
 
 				int idx = -1;
@@ -354,7 +393,20 @@ namespace {
 		l.server->ResetLobby();
 	}
 
-	json HandleMatchmaker(const json& req, ULONGLONG now) {
+	json HandleMatchmaker(const json& req, ULONGLONG now, const sockaddr_in& from) {
+		// STUN: tell the caller what address this datagram came from. A client
+		// asks this from the very socket GGPO will use, so the answer is the
+		// mapping its NAT will present to the other player. Nothing is stored.
+		if (req.value("type", std::string()) == "stun") {
+			char ip[INET_ADDRSTRLEN] = { 0 };
+			inet_ntop(AF_INET, &from.sin_addr, ip, sizeof(ip));
+			// Logged because a player reported "the server did not answer"
+			// while their ordinary matchmaking to this same port worked. Only
+			// the server can say whether the request ever arrived; without this
+			// line the two possibilities are indistinguishable.
+			spdlog::info("stun request from {}:{}", ip, ntohs(from.sin_port));
+			return { {"ok", true}, {"ip", ip}, {"port", ntohs(from.sin_port)} };
+		}
 		std::string op = req.value("op", "");
 		if (op == "ping") {
 			int active = 0;
@@ -488,7 +540,7 @@ int main(int argc, char** argv) {
 			buf[n] = 0;
 			json reply;
 			try {
-				reply = HandleMatchmaker(json::parse(buf), now);
+				reply = HandleMatchmaker(json::parse(buf), now, from);
 			}
 			catch (const std::exception&) {
 				reply = { {"ok", false}, {"error", "bad_request"} };

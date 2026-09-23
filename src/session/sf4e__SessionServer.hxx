@@ -73,6 +73,23 @@ namespace sf4e {
 		);
 		void HandleResults(int loserSide);
 
+		// Once both players have offered an endpoint, hand each of them the
+		// other's, with a shared token so the punch cannot be spoofed. Does
+		// nothing until both have opted in.
+		void MaybeExchangeDirectEndpoints();
+		bool _directExchanged = false;
+
+		// Who actually chose the character sitting in each seat. The picks
+		// themselves have to be indexed by side because that is what the clients
+		// apply, but a seat is not an identity: players rotate on a winner-stays
+		// result, and they leave and rejoin in whatever order they like. Holding
+		// the owner alongside lets a pick be discarded the moment it stops
+		// describing whoever is actually in that seat, which is the difference
+		// between "cleared on the membership changes we thought of" and "cannot
+		// be wrong".
+		SessionProtocol::ConnectionID _charaOwner[2];
+		void DropCharaFromVacatedSeats();
+
 		// When the current match started, for the duration in the stats line.
 		// 0 means no match is running.
 		uint64_t _matchStartMs = 0;
@@ -90,6 +107,13 @@ namespace sf4e {
 		// only learns endpoints from these, so a stranger spraying the relay
 		// ports cannot take a player's slot or inject packets into the match.
 		std::vector<uint32_t> MemberIPv4s() const;
+
+		// Drop the remembered character picks (and readiness) after any change to
+		// who is in the lobby. The picks are indexed by side, so a join or a
+		// leave can leave them describing the wrong player.
+		// Called whenever someone joins or leaves. Picks and readiness are NOT
+		// reset here -- DropCharaFromVacatedSeats() handles those by owner.
+		void OnMembershipChanged();
 
 		SessionServer(
 			std::string identity,
@@ -134,6 +158,13 @@ namespace sf4e {
 			// uses it to refuse traffic from anyone who is not in this lobby.
 			// Host byte order; 0 if unknown.
 			uint32_t peerIPv4 = 0;
+			// Set when this player opted into direct play, and held privately
+			// here rather than in `data` so it is never broadcast: it only ever
+			// goes to the one other player, and only once they opt in too.
+			std::string directIp;
+			uint16_t directPort = 0;
+			std::string directLocalIp;
+			uint16_t directLocalPort = 0;
 		} SessionMember;
 
 		std::map<HSteamNetConnection, SessionProtocol::ConnectionID> cidMap;

@@ -1,0 +1,216 @@
+diff -ruN a/src/include/ggponet.h b/src/include/ggponet.h
+--- a/src/include/ggponet.h	2026-09-17 09:53:11.311458900 +0200
++++ b/src/include/ggponet.h	2026-09-17 09:55:37.492894100 +0200
+@@ -541,6 +541,45 @@
+                                                                 int timeout);
+ 
+ /*
++ * ggpo_get_last_confirmed_frame --
++ *
++ * sf4e: the newest frame for which every player's input has actually arrived,
++ * so it can no longer be rolled back. Callers that need to know a frame has
++ * SETTLED -- comparing state between peers, publishing a match result -- can
++ * ask instead of assuming that some number of frames of age is enough. That
++ * assumption is only ever right by luck.
++ *
++ * Returns GGPO_ERRORCODE_UNSUPPORTED on backends that do not track it.
++ */
++GGPO_API GGPOErrorCode __cdecl ggpo_get_last_confirmed_frame(GGPOSession *,
++                                                             int *frame);
++
++/*
++ * ggpo_set_assert_handler --
++ *
++ * sf4e: called with the assertion text when an internal invariant breaks.
++ * Without one, GGPO used to pop a modal dialog (freezing the caller's thread)
++ * and then exit(0) -- a clean exit that no crash handler can catch, leaving no
++ * dump and no log. Install one, log the text, and tear the SESSION down.
++ *
++ * The handler runs on whichever thread tripped the assertion, and GGPO's state
++ * is inconsistent by the time it is called: log, signal, and return. Do not
++ * call back into GGPO from it.
++ */
++GGPO_API void __cdecl ggpo_set_assert_handler(void (__cdecl *handler)(const char *msg));
++
++/*
++ * ggpo_get_unconfirmed_depth --
++ *
++ * sf4e: how many frames back the confirmed boundary sits from the present.
++ * Callers number their own frames differently from GGPO, so an absolute frame
++ * number cannot be compared against theirs -- but a depth can. Use this to ask
++ * "is a frame this far back settled yet?".
++ */
++GGPO_API GGPOErrorCode __cdecl ggpo_get_unconfirmed_depth(GGPOSession *,
++                                                          int *depth);
++
++/*
+  * ggpo_log --
+  *
+  * Used to write to the ggpo.net log.  In the current versions of the
+diff -ruN a/src/lib/ggpo/backends/backend.h b/src/lib/ggpo/backends/backend.h
+--- a/src/lib/ggpo/backends/backend.h	2026-09-17 09:53:11.320965800 +0200
++++ b/src/lib/ggpo/backends/backend.h	2026-09-17 09:53:34.888782000 +0200
+@@ -21,6 +21,9 @@
+    virtual GGPOErrorCode Chat(char *text) { return GGPO_OK; }
+    virtual GGPOErrorCode DisconnectPlayer(GGPOPlayerHandle handle) { return GGPO_OK; }
+    virtual GGPOErrorCode GetNetworkStats(GGPONetworkStats *stats, GGPOPlayerHandle handle) { return GGPO_OK; }
++   // sf4e: see ggpo_get_last_confirmed_frame / ggpo_get_unconfirmed_depth.
++   virtual GGPOErrorCode GetLastConfirmedFrame(int *frame) { return GGPO_ERRORCODE_UNSUPPORTED; }
++   virtual GGPOErrorCode GetUnconfirmedDepth(int *depth) { return GGPO_ERRORCODE_UNSUPPORTED; }
+    virtual GGPOErrorCode Logv(const char *fmt, va_list list) { ::Logv(fmt, list); return GGPO_OK; }
+ 
+    virtual GGPOErrorCode SetFrameDelay(GGPOPlayerHandle player, int delay) { return GGPO_ERRORCODE_UNSUPPORTED; }
+diff -ruN a/src/lib/ggpo/backends/p2p.h b/src/lib/ggpo/backends/p2p.h
+--- a/src/lib/ggpo/backends/p2p.h	2026-09-17 09:53:22.597228900 +0200
++++ b/src/lib/ggpo/backends/p2p.h	2026-09-17 09:56:30.434045500 +0200
+@@ -29,6 +29,9 @@
+    virtual GGPOErrorCode IncrementFrame(void);
+    virtual GGPOErrorCode DisconnectPlayer(GGPOPlayerHandle handle);
+    virtual GGPOErrorCode GetNetworkStats(GGPONetworkStats *stats, GGPOPlayerHandle handle);
++   // sf4e: see ggpo_get_last_confirmed_frame / ggpo_get_unconfirmed_depth.
++   virtual GGPOErrorCode GetLastConfirmedFrame(int *frame) { *frame = _sync.GetLastConfirmedFrame(); return GGPO_OK; }
++   virtual GGPOErrorCode GetUnconfirmedDepth(int *depth) { *depth = _sync.GetUnconfirmedDepth(); return GGPO_OK; }
+    virtual GGPOErrorCode SetFrameDelay(GGPOPlayerHandle player, int delay);
+    virtual GGPOErrorCode SetDisconnectTimeout(int timeout);
+    virtual GGPOErrorCode SetDisconnectNotifyStart(int timeout);
+diff -ruN a/src/lib/ggpo/backends/spectator.h b/src/lib/ggpo/backends/spectator.h
+--- a/src/lib/ggpo/backends/spectator.h	2026-09-17 09:53:22.600231000 +0200
++++ b/src/lib/ggpo/backends/spectator.h	2026-09-17 09:53:34.976927900 +0200
+@@ -30,6 +30,10 @@
+    virtual GGPOErrorCode SyncInput(void *values, int size, int *disconnect_flags);
+    virtual GGPOErrorCode IncrementFrame(void);
+    virtual GGPOErrorCode DisconnectPlayer(GGPOPlayerHandle handle) { return GGPO_ERRORCODE_UNSUPPORTED; }
++   // sf4e: a spectator never predicts, so everything it has been handed is
++   // confirmed by definition.
++   virtual GGPOErrorCode GetLastConfirmedFrame(int *frame) { *frame = _last_received_frame; return GGPO_OK; }
++   virtual GGPOErrorCode GetUnconfirmedDepth(int *depth) { *depth = 0; return GGPO_OK; }
+    virtual GGPOErrorCode GetNetworkStats(GGPONetworkStats *stats, GGPOPlayerHandle handle) {
+       memset(stats, 0, sizeof(*stats));
+       _host.GetNetworkStats(stats);
+diff -ruN a/src/lib/ggpo/main.cpp b/src/lib/ggpo/main.cpp
+--- a/src/lib/ggpo/main.cpp	2026-09-17 09:53:11.329471900 +0200
++++ b/src/lib/ggpo/main.cpp	2026-09-17 09:53:34.945884700 +0200
+@@ -206,3 +206,32 @@
+    return GGPO_OK;
+ }
+ 
++
++// sf4e: set by ggpo_set_assert_handler; read by Platform::AssertFailed.
++// Defined here so the whole library shares one, and NULL until the host
++// installs one (in which case AssertFailed falls back to OutputDebugString).
++void (__cdecl *g_ggpo_assert_handler)(const char *msg) = NULL;
++
++void __cdecl
++ggpo_set_assert_handler(void (__cdecl *handler)(const char *msg))
++{
++   g_ggpo_assert_handler = handler;
++}
++
++GGPOErrorCode __cdecl
++ggpo_get_last_confirmed_frame(GGPOSession *ggpo, int *frame)
++{
++   if (!ggpo || !frame) {
++      return GGPO_ERRORCODE_INVALID_SESSION;
++   }
++   return ggpo->GetLastConfirmedFrame(frame);
++}
++
++GGPOErrorCode __cdecl
++ggpo_get_unconfirmed_depth(GGPOSession *ggpo, int *depth)
++{
++   if (!ggpo || !depth) {
++      return GGPO_ERRORCODE_INVALID_SESSION;
++   }
++   return ggpo->GetUnconfirmedDepth(depth);
++}
+diff -ruN a/src/lib/ggpo/network/udp.cpp b/src/lib/ggpo/network/udp.cpp
+--- a/src/lib/ggpo/network/udp.cpp	2026-09-17 09:53:11.315966100 +0200
++++ b/src/lib/ggpo/network/udp.cpp	2026-09-17 11:00:00.232966200 +0200
+@@ -98,6 +98,13 @@
+          }
+          break;
+       } else if (len > 0) {
++         // sf4e: a datagram too short to even contain the header would have
++         // its fields read past the end of the received data. Anything can
++         // send one; drop it before it is treated as a message at all.
++         if (len < (int)sizeof(((UdpMsg *)0)->hdr)) {
++            Log("dropping runt packet (len:%d).\n", len);
++            continue;
++         }
+          char src_ip[1024];
+          Log("recvfrom returned (len:%d  from:%s:%d).\n", len, inet_ntop(AF_INET, (void*)&recv_addr.sin_addr, src_ip, ARRAY_SIZE(src_ip)), ntohs(recv_addr.sin_port) );
+          UdpMsg *msg = (UdpMsg *)recv_buf;
+diff -ruN a/src/lib/ggpo/network/udp_proto.cpp b/src/lib/ggpo/network/udp_proto.cpp
+--- a/src/lib/ggpo/network/udp_proto.cpp	2026-09-17 09:53:22.601736700 +0200
++++ b/src/lib/ggpo/network/udp_proto.cpp	2026-09-17 10:59:41.966293400 +0200
+@@ -479,7 +479,14 @@
+       Log("%s input ack.\n", prefix);
+       break;
+    default:
+-      ASSERT(FALSE && "Unknown UdpMsg type.");
++      // sf4e: was ASSERT(FALSE). Anything at all can send a datagram to this
++      // port -- a NAT-traversal probe, another protocol, a stray packet,
++      // someone spraying it -- and this is a LOGGING function. Killing the
++      // process from inside a log call, on unvalidated network input, is never
++      // right. Worse, it also fires on the "recv rejecting" path above, so a
++      // packet GGPO had ALREADY decided to discard still took the game down.
++      Log("%s unknown message type %d, ignored.\n", prefix, msg->hdr.type);
++      break;
+    }
+ }
+ 
+diff -ruN a/src/lib/ggpo/platform_windows.h b/src/lib/ggpo/platform_windows.h
+--- a/src/lib/ggpo/platform_windows.h	2026-09-17 09:53:11.326966200 +0200
++++ b/src/lib/ggpo/platform_windows.h	2026-09-17 09:53:34.917328900 +0200
+@@ -20,7 +20,17 @@
+ 
+ public:  // functions
+    static ProcessID GetProcessID() { return GetCurrentProcessId(); }
+-   static void AssertFailed(char *msg) { MessageBoxA(NULL, msg, "GGPO Assertion Failed", MB_OK | MB_ICONEXCLAMATION); }
++   // sf4e: a MessageBox here blocks the thread that called it -- the game
++   // thread -- so the game froze behind a dialog nobody could see, and the
++   // ASSERT macro then exited the process. Hand the text to the host instead.
++   static void AssertFailed(char *msg) {
++      extern void (__cdecl *g_ggpo_assert_handler)(const char *msg);
++      if (g_ggpo_assert_handler) {
++         g_ggpo_assert_handler(msg);
++         return;
++      }
++      OutputDebugStringA(msg);
++   }
+    static uint32 GetCurrentTimeMS() { return timeGetTime(); }
+    static int GetConfigInt(const char* name);
+    static bool GetConfigBool(const char* name);
+diff -ruN a/src/lib/ggpo/sync.h b/src/lib/ggpo/sync.h
+--- a/src/lib/ggpo/sync.h	2026-09-17 09:53:11.324967000 +0200
++++ b/src/lib/ggpo/sync.h	2026-09-17 09:53:34.875275000 +0200
+@@ -56,6 +56,13 @@
+    void IncrementFrame(void);
+ 
+    int GetFrameCount() { return _framecount; }
++   // sf4e: the newest frame whose inputs have all arrived, so it can no
++   // longer be rolled back.
++   int GetLastConfirmedFrame() { return _last_confirmed_frame; }
++   // sf4e: how far back that boundary sits from the present. A caller that
++   // numbers its own frames differently cannot compare an absolute frame
++   // number against GGPO's -- but it can compare a depth.
++   int GetUnconfirmedDepth() { return _framecount - _last_confirmed_frame; }
+    bool InRollback() { return _rollingback; }
+ 
+    bool GetEvent(Event &e);
+diff -ruN a/src/lib/ggpo/types.h b/src/lib/ggpo/types.h
+--- a/src/lib/ggpo/types.h	2026-09-17 09:53:11.326966200 +0200
++++ b/src/lib/ggpo/types.h	2026-09-17 09:53:34.931851100 +0200
+@@ -61,7 +61,11 @@
+          Log("\n");                                         \
+          Log("\n");                                         \
+          Platform::AssertFailed(assert_buf);                \
+-         exit(0);                                           \
++         /* sf4e: exit(0) used to be here. It raised no exception, so the */ \
++         /* host's crash handler never ran: no dump, no log line, and     */ \
++         /* Windows recorded a SUCCESSFUL exit. Whole sessions died with  */ \
++         /* no trace of why. AssertFailed now hands the text to the host, */ \
++         /* which logs it and ends the MATCH rather than the process.     */ \
+       }                                                     \
+    } while (false)
+ 

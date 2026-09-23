@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cstring>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -144,6 +145,79 @@ int SessionServer::PlayerCount() const {
 		if (!iter->data.spectator) n++;
 	}
 	return n;
+}
+
+void SessionServer::OnMembershipChanged() {
+	// Deliberately does NOT touch the picks or the ready flags.
+	//
+	// It used to clear both, to stop a stale seat-indexed pick describing the
+	// wrong player. DropCharaFromVacatedSeats() now does that precisely, by
+	// owner, so the blanket wipe was pure collateral damage: a player who
+	// picked a character and pressed READY while waiting had their readiness
+	// erased the moment their opponent walked in, so the lobby could never
+	// reach all-ready and the match simply never started. Being ready before
+	// the other player arrives is the normal way to use a lobby.
+	_directExchanged = false;
+	_dataDirty = true;
+}
+
+void SessionServer::DropCharaFromVacatedSeats() {
+	// A pick only survives while the player who made it is still sitting in
+	// that seat. Rotation on a winner-stays result moves the loser and the
+	// swap below keeps their pick with them; anything else -- a player leaving,
+	// two players rejoining in the opposite order, a seat filled by someone new
+	// -- leaves a pick describing a player who is no longer there, and the two
+	// clients then disagree about who is playing what. That disagreement is a
+	// desync at frame 60 with mismatched vitmax, which is exactly what it was.
+	for (int side = 0; side < 2; side++) {
+		bool occupied = (int)clients.size() > side && !clients.at(side).data.spectator;
+		bool sameOwner = occupied && _charaOwner[side] == clients.at(side).data.connId;
+		if (!sameOwner && _matchData.chara[side].charaID != 0) {
+			memset(&_matchData.chara[side], 0, sizeof(_matchData.chara[side]));
+			_matchData.readyMessageNum[side] = -1;
+			_charaOwner[side] = SessionProtocol::ConnectionID();
+			_dataDirty = true;
+		}
+	}
+}
+
+void SessionServer::MaybeExchangeDirectEndpoints() {
+	// Both players, both opted in, or nothing happens. This is the gate that
+	// keeps the promise: a player who left direct play off never has their
+	// address handed to anyone, whatever the other side chose.
+	if (_directExchanged || PlayerCount() < 2) {
+		return;
+	}
+	if (clients.at(0).directPort == 0 || clients.at(1).directPort == 0) {
+		return;
+	}
+
+	// A shared nonce both sides put in their punch packets, so a stray or
+	// forged datagram cannot be mistaken for the peer answering.
+	static const char HEX[] = "0123456789abcdef";
+	char token[17] = { 0 };
+	for (int i = 0; i < 16; i++) {
+		token[i] = HEX[rand() % 16];
+	}
+
+	for (int side = 0; side < 2; side++) {
+		const SessionMember& other = clients.at(1 - side);
+		SessionProtocol::DirectPeer peer;
+		peer.ip = other.directIp;
+		peer.port = other.directPort;
+		peer.localIp = other.directLocalIp;
+		peer.localPort = other.directLocalPort;
+		peer.token = token;
+		// Respond(), not BroadcastMessage(): the spectators in this lobby
+		// must not see either player's address.
+		Respond(clients.at(side).conn, peer);
+	}
+	_directExchanged = true;
+	// Tagged with the relay port, because that is the key the relay lines use
+	// too. Without it a pairing could not be matched against whether that
+	// relay later carried any traffic -- which is the only way to tell a
+	// pairing that actually went direct from one that quietly fell back.
+	spdlog::info("both players opted into direct play; endpoints exchanged (relay :{})", _relayPort);
 }
 
 std::vector<uint32_t> SessionServer::MemberIPv4s() const {
@@ -314,8 +388,89 @@ int SessionServer::Step()
 					spdlog::info("Server: could not deserialize SetConditionsRequest");
 					continue;
 				}
+				if (!SessionProtocol::CharaConditionsValid(request.chara)) {
+					spdlog::warn("Server: sender {} sent out-of-range character conditions (chara {} costume {} color {} ultra {} handicap {}); ignored",
+						conn, request.chara.charaID, request.chara.costume, request.chara.color, request.chara.ultraCombo, request.chara.handicap);
+					continue;
+				}
 				_matchData.chara[side] = request.chara;
+				_charaOwner[side] = clients.at(side).data.connId;
 				_dataDirty = true;
+			}
+			else if (type == SessionProtocol::MT_DESYNC_REPORT) {
+				SessionProtocol::DesyncReport report;
+				try {
+					msg.get_to(report);
+				}
+				catch (json::exception e) {
+					spdlog::info("Server: could not deserialize DesyncReport");
+					continue;
+				}
+				// Recorded like any other statistic: no name, no address. The
+				// point is to see the shape of desyncs across every player
+				// rather than only the handful who send us a log.
+				LogStat("desync", {
+					{"frame", report.frame},
+					{"gameplay", report.gameplay},
+					{"flow_differs", report.flowDiffers},
+					{"input_delay", report.inputDelay},
+					{"direct", report.direct},
+					{"ping_ms", report.pingMs},
+					{"diff", report.diff},
+				});
+				spdlog::warn("desync reported at frame {} (delay {}, ping {} ms, {}): {}",
+					report.frame, report.inputDelay, report.pingMs,
+					report.direct ? "peer to peer" : "server relay",
+					report.diff.substr(0, 200));
+
+				// Tell the OTHER player too. Only the PC that noticed the fork
+				// was ending its match; the other one kept running against a peer
+				// that had already gone, which is the black screen people get
+				// stuck on. A desync is a property of the match, not of the
+				// machine that happened to detect it first, so both sides leave.
+				for (auto& other : clients) {
+					if (other.conn != conn && other.conn != k_HSteamNetConnection_Invalid) {
+						Respond(other.conn, msg);
+					}
+				}
+			}
+			else if (type == SessionProtocol::MT_DIRECT_OFFER) {
+				int side = -1;
+				for (int i = 0; i < 2; i++) {
+					if (clients.size() > i && clients.at(i).conn == conn) {
+						side = i;
+						break;
+					}
+				}
+				// Spectators never take part in this: the direct path is only
+				// ever between the two players.
+				if (side == -1) {
+					continue;
+				}
+
+				SessionProtocol::DirectOffer offer;
+				try {
+					msg.get_to(offer);
+				}
+				catch (json::exception e) {
+					spdlog::info("Server: could not deserialize DirectOffer");
+					continue;
+				}
+				// ALWAYS re-pair on a fresh offer, changed endpoint or not.
+				//
+				// Only re-pairing when the address changed looked reasonable
+				// and was wrong: after a match both clients discard their peer
+				// info and re-arm, so they need a new pairing even though a
+				// port-preserving NAT hands back the identical endpoint. The
+				// server saw "nothing changed", stayed quiet, and every
+				// rematch silently fell back to the relay. An offer only
+				// arrives when a client has re-armed, so this is not chatty.
+				_directExchanged = false;
+				clients.at(side).directIp = offer.ip;
+				clients.at(side).directPort = offer.port;
+				clients.at(side).directLocalIp = offer.localIp;
+				clients.at(side).directLocalPort = offer.localPort;
+				MaybeExchangeDirectEndpoints();
 			}
 			else if (type == SessionProtocol::MT_PREBATTLE_SETENV) {
 				int side = -1;
@@ -362,6 +517,10 @@ int SessionServer::Step()
 					continue;
 				}
 
+				if (!SessionProtocol::StageIDValid(request.stageID)) {
+					spdlog::warn("Server: sender {} sent out-of-range stage {}; ignored", conn, request.stageID);
+					continue;
+				}
 				_matchData.stageID = request.stageID;
 				_dataDirty = true;
 			}
@@ -448,6 +607,14 @@ int SessionServer::Step()
 		}
 	}
 
+	// Any pick whose owner no longer occupies that seat is dropped before it
+	// can reach a client.
+	DropCharaFromVacatedSeats();
+
+	// Cheap and guarded: pairs the two players as soon as both have offered,
+	// whatever order the offers and the join happened to arrive in.
+	MaybeExchangeDirectEndpoints();
+
 	if (_dataDirty) {
 		SessionProtocol::SessionDataUpdate updateMsg;
 		updateMsg.lobbyData = _lobbyData;
@@ -477,6 +644,19 @@ int SessionServer::Step()
 		BroadcastMessage(json(SessionProtocol::LobbyAllReady()));
 
 		// Both sides are ready, so a match is starting now.
+		//
+		// If the previous match never reported a result before this one began,
+		// close it out here with its real length. Letting the new match simply
+		// overwrite the clock is what produced the 0-second entries in the
+		// stats: the old match's result would arrive a moment later and be
+		// measured against the new match's start.
+		if (_matchStartMs != 0) {
+			LogStat("match_end", {
+				{"seconds", (int)((NowMs() - _matchStartMs) / 1000)},
+				{"spectators", SpectatorCount()},
+				{"reported", false},
+			});
+		}
 		_matchStartMs = NowMs();
 		LogStat("match_start", {
 			{"players", PlayerCount()},
@@ -577,6 +757,15 @@ void SessionServer::OnSteamNetConnectionStatusChanged(SteamNetConnectionStatusCh
 				if (iter->conn == pInfo->m_hConn) {
 					clients.erase(iter);
 					_dataDirty = true;
+					// Someone left, so the remaining players may be reseated and
+					// whoever rejoins can land on either side. The kept
+					// characters are indexed by SIDE, so they now describe a
+					// seating that no longer exists: keeping them made the two
+					// clients disagree about who was playing what, which forked
+					// the match at frame 60 with mismatched vitmax. Both players
+					// re-send their character when they ready up, so dropping it
+					// here costs nothing and is always correct.
+					OnMembershipChanged();
 					break;
 				}
 			}
@@ -707,6 +896,13 @@ SessionProtocol::JoinResult SessionServer::RegisterToWait(
 	else {
 		// Players stay in front of the spectators.
 		clients.insert(clients.begin() + PlayerCount(), std::move(newMember));
+		// A new player means the seating just changed, and the kept characters
+		// are indexed by side. Two players who leave and rejoin in the opposite
+		// order swap sides with no winner-stays rotation to account for it, so
+		// the picks would describe the wrong player -- which is exactly how a
+		// match forked at frame 60 with P2.vitmax 1050 on one machine and 1000
+		// on the other. Both players re-send their pick when they ready up.
+		OnMembershipChanged();
 	}
 	return SessionProtocol::JOIN_OK;
 }
@@ -742,11 +938,21 @@ void SessionServer::HandleResults(int loserIndex) {
 	// Duration tells us whether people are playing full sets or bouncing off
 	// something after a few seconds, which is the whole point of collecting it.
 	if (_matchStartMs != 0) {
-		LogStat("match_end", {
-			{"seconds", (int)((NowMs() - _matchStartMs) / 1000)},
-			{"spectators", SpectatorCount()},
-		});
-		_matchStartMs = 0;
+		uint64_t elapsed = NowMs() - _matchStartMs;
+		// A result arriving within seconds of this match STARTING belongs to
+		// the previous match, delayed past the rematch: that one was closed out
+		// when this match started, so logging it again would both double-count
+		// it and destroy the running match's clock. No real match ends this
+		// fast -- the shortest genuine one we have ever recorded was a
+		// mid-match disconnect at five seconds.
+		if (elapsed >= 3000) {
+			LogStat("match_end", {
+				{"seconds", (int)(elapsed / 1000)},
+				{"spectators", SpectatorCount()},
+				{"reported", true},
+			});
+			_matchStartMs = 0;
+		}
 	}
 
 	// Winner stays as P1: the loser moves behind the other player, but
@@ -764,6 +970,7 @@ void SessionServer::HandleResults(int loserIndex) {
 		// anyone: a loser already in the last seat is reinserted where it was.
 		if (nPlayers == 2 && loserIndex == 0) {
 			std::swap(_matchData.chara[0], _matchData.chara[1]);
+			std::swap(_charaOwner[0], _charaOwner[1]);
 		}
 	}
 	for (auto iter = clients.begin(); iter != clients.end(); iter++) {
