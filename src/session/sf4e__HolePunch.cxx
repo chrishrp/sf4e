@@ -322,19 +322,21 @@ bool HolePunch::Punch(const std::string& peerIp, uint16_t peerPort,
 		// Their ack: our probes are arriving, and so are their replies. Only
 		// now is the path proven in both directions.
 		if ((size_t)n == ack.size() && memcmp(buf, ack.c_str(), ack.size()) == 0) {
-			// Reply to the address it actually came FROM, not the one we aimed
-			// at: a NAT can present a different port than the server observed.
-			char fromIp[INET_ADDRSTRLEN] = { 0 };
-			inet_ntop(AF_INET, &from.sin_addr, fromIp, sizeof(fromIp));
-			chosenIp = fromIp;
-			chosenPort = ntohs(from.sin_port);
-
-			const char* which = "unexpected source";
+			// Only an address the peer offered may become the match endpoint;
+			// the port may differ from what the server observed, the host not.
+			const char* which = nullptr;
 			for (int i = 0; i < numCandidates; i++) {
 				if (from.sin_addr.s_addr == candidates[i].addr.sin_addr.s_addr) {
 					which = candidates[i].what;
 				}
 			}
+			if (which == nullptr) {
+				continue;
+			}
+			char fromIp[INET_ADDRSTRLEN] = { 0 };
+			inet_ntop(AF_INET, &from.sin_addr, fromIp, sizeof(fromIp));
+			chosenIp = fromIp;
+			chosenPort = ntohs(from.sin_port);
 			// Keep answering their probes briefly: they may still be waiting
 			// for an ack of their own, and if they give up we end up split.
 			DWORD settle = GetTickCount() + 150;

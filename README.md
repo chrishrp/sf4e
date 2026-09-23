@@ -114,11 +114,12 @@ provide the following dependencies:
   `GamenNetworkingSockets` provides a very helpful high-level API on top
   of message passing, and additionally supports NAT hole punching if
   a signalling server is run.
-* [GGPO](https://github.com/pond3r/ggpo), used to provide rollback.
+* [GGPO](https://github.com/pond3r/ggpo), used to provide rollback. The build applies the
+  patches in `vcpkg-ports/ggpo`, so the shipped `GGPO.dll` is not the stock library.
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE.md file for details.
+This project is licensed under the MIT License - see the LICENSE file for details. The license texts of the bundled libraries ship in the `licenses` folder of every release.
 
 ## External Licenses and Copyright Information
 

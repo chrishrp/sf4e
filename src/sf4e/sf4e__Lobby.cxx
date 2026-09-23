@@ -559,6 +559,7 @@ namespace {
 		std::vector<char> buf(addr.begin(), addr.end());
 		buf.push_back(0);
 		fUserApp::StartSession(buf.data(), g_localGgpoPort, sf4e::sidecarHash, std::string(g_name), g_deviceType, g_deviceIdx, (uint8_t)g_delay, g_spectate);
+		if (fUserApp::netplay) fUserApp::netplay->client.joinSecret = g_mm.secret;
 		g_sentReady = false;
 		g_reportedLastMatch = false;
 		g_lobbyRow = 0;

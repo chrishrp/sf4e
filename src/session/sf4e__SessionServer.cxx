@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
+#include <random>
 #include <string>
 #include <utility>
 #include <vector>
@@ -195,9 +196,10 @@ void SessionServer::MaybeExchangeDirectEndpoints() {
 	// A shared nonce both sides put in their punch packets, so a stray or
 	// forged datagram cannot be mistaken for the peer answering.
 	static const char HEX[] = "0123456789abcdef";
-	char token[17] = { 0 };
-	for (int i = 0; i < 16; i++) {
-		token[i] = HEX[rand() % 16];
+	std::random_device rd;
+	char token[33] = { 0 };
+	for (int i = 0; i < 32; i++) {
+		token[i] = HEX[rd() % 16];
 	}
 
 	for (int side = 0; side < 2; side++) {
@@ -230,6 +232,36 @@ std::vector<uint32_t> SessionServer::MemberIPv4s() const {
 	return out;
 }
 
+std::vector<uint32_t> SessionServer::PlayerIPv4s() const {
+	std::vector<uint32_t> out(2, 0);
+	for (int i = 0; i < PlayerCount() && i < 2; i++) {
+		out[i] = clients.at(i).peerIPv4;
+	}
+	return out;
+}
+
+void SessionServer::SetJoinSecret(const std::string& secret) {
+	_joinSecret = secret;
+}
+
+void SessionServer::RequireJoinSecret(bool required) {
+	_requireJoinSecret = required;
+}
+
+void SessionServer::DisconnectAll() {
+	for (auto iter = _accepted.begin(); iter != _accepted.end(); iter++) {
+		_interface->SetConnectionPollGroup(iter->first, k_HSteamNetPollGroup_Invalid);
+		_interface->CloseConnection(iter->first, 0, "lobby closed", false);
+	}
+	_accepted.clear();
+	cidMap.clear();
+	if (!clients.empty()) {
+		clients.clear();
+		OnMembershipChanged();
+	}
+	_dataDirty = true;
+}
+
 int SessionServer::SpectatorCount() const {
 	return (int)clients.size() - PlayerCount();
 }
@@ -240,6 +272,7 @@ void SessionServer::SetSidecarHash(const std::string& hash) {
 
 void SessionServer::ResetLobby() {
 	_matchData.Clear();
+	_desyncReports = 0;
 	for (auto iter = clients.begin(); iter != clients.end(); iter++) {
 		iter->data.watching = false;
 	}
@@ -319,6 +352,7 @@ int SessionServer::Step()
 				if (fwdMsg.src.host == _identity) {
 					if (fwdMsg.src.user != std::to_string(conn)) {
 						spdlog::debug("Server: dropping fraudulent packet; {} masqueraded as {}", conn, fwdMsg.src.user);
+						continue;
 					}
 				}
 
@@ -355,7 +389,7 @@ int SessionServer::Step()
 				}
 
 				SteamNetworkingIPAddr peerAddr = *(pIncomingMsg->m_identityPeer.GetIPAddr());
-				SessionProtocol::JoinResult joinResult = RegisterToWait(conn, request.port, request.sidecarHash, request.username, peerAddr, cid, request.spectator);
+				SessionProtocol::JoinResult joinResult = RegisterToWait(conn, request.port, request.sidecarHash, request.username, peerAddr, cid, request.spectator, request.secret);
 				if (joinResult != SessionProtocol::JOIN_OK) {
 					spdlog::info("Server: rejecting registration for reason {}", (int)joinResult);
 					SessionProtocol::SessionJoinReject reject;
@@ -406,6 +440,16 @@ int SessionServer::Step()
 					spdlog::info("Server: could not deserialize DesyncReport");
 					continue;
 				}
+				bool fromPlayer = false;
+				for (int i = 0; i < PlayerCount(); i++) {
+					if (clients.at(i).conn == conn) fromPlayer = true;
+				}
+				if (!fromPlayer || _desyncReports >= 20) {
+					continue;
+				}
+				_desyncReports++;
+				report.diff = report.diff.substr(0, 512);
+				msg = report;
 				// Recorded like any other statistic: no name, no address. The
 				// point is to see the shape of desyncs across every player
 				// rather than only the handful who send us a log.
@@ -746,7 +790,7 @@ void SessionServer::OnSteamNetConnectionStatusChanged(SteamNetConnectionStatusCh
 				pszDebugLogAction = "closed by peer";
 			}
 
-			spdlog::info("Connection {} {}, reason {}: {}",
+			spdlog::debug("Connection {} {}, reason {}: {}",
 				pInfo->m_info.m_szConnectionDescription,
 				pszDebugLogAction,
 				pInfo->m_info.m_eEndReason,
@@ -770,21 +814,30 @@ void SessionServer::OnSteamNetConnectionStatusChanged(SteamNetConnectionStatusCh
 				}
 			}
 
-			// Clean up the connection.  This is important!
-			// The connection is "closed" in the network sense, but
-			// it has not been destroyed.  We must close it on our end, too
-			// to finish up.  The reason information do not matter in this case,
-			// and we cannot linger because it's already closed on the other end,
-			// so we just pass 0's.
-			_interface->SetConnectionPollGroup(pInfo->m_hConn, k_HSteamNetPollGroup_Invalid);
-			_interface->CloseConnection(pInfo->m_hConn, 0, nullptr, false);
 		}
 
+		// Close on every path, including a handshake that never completed:
+		// the handle is not destroyed until we do.
+		cidMap.erase(pInfo->m_hConn);
+		_accepted.erase(pInfo->m_hConn);
+		_interface->SetConnectionPollGroup(pInfo->m_hConn, k_HSteamNetPollGroup_Invalid);
+		_interface->CloseConnection(pInfo->m_hConn, 0, nullptr, false);
 		break;
 	}
 
 	case k_ESteamNetworkingConnectionState_Connecting:
 	{
+		uint32_t ip = pInfo->m_info.m_addrRemote.IsIPv4() ? pInfo->m_info.m_addrRemote.GetIPv4() : 0;
+		int fromSameIp = 0;
+		for (auto iter = _accepted.begin(); iter != _accepted.end(); iter++) {
+			if (iter->second == ip) fromSameIp++;
+		}
+		if (_accepted.size() >= 2 * MAX_SF4E_PROTOCOL_USERS || fromSameIp >= MAX_SF4E_PROTOCOL_USERS) {
+			_interface->CloseConnection(pInfo->m_hConn, 0, nullptr, false);
+			spdlog::debug("Server: connection refused, lobby has {} pending/active connections", _accepted.size());
+			break;
+		}
+
 		// Try to accept the connection.
 		if (_interface->AcceptConnection(pInfo->m_hConn) != k_EResultOK)
 		{
@@ -797,6 +850,7 @@ void SessionServer::OnSteamNetConnectionStatusChanged(SteamNetConnectionStatusCh
 		}
 
 		_interface->SetConnectionPollGroup(pInfo->m_hConn, _pollGroup);
+		_accepted[pInfo->m_hConn] = ip;
 	}
 
 	default:
@@ -820,13 +874,27 @@ SessionProtocol::JoinResult SessionServer::RegisterToWait(
 	const HSteamNetConnection& conn,
 	const uint16_t& port,
 	const std::string& sidecarHash,
-	const std::string& name,
+	const std::string& rawName,
 	const SteamNetworkingIPAddr& peerAddr,
 	SessionProtocol::ConnectionID& cid,
-	bool spectator
+	bool spectator,
+	const std::string& secret
 ) {
+	if (_requireJoinSecret && (_joinSecret.empty() || secret != _joinSecret)) {
+		return SessionProtocol::JR_SECRET_INVALID;
+	}
 	if (!_sidecarHash.empty() && sidecarHash != _sidecarHash) {
 		return SessionProtocol::JR_HASH_INVALID;
+	}
+	std::string name;
+	for (size_t i = 0; i < rawName.size() && name.size() < 32; i++) {
+		unsigned char ch = (unsigned char)rawName[i];
+		if (ch >= 0x20 && ch != 0x7f) {
+			name.push_back((char)ch);
+		}
+	}
+	if (name.empty()) {
+		name = "Player";
 	}
 
 	if (clients.size() >= MAX_SF4E_PROTOCOL_USERS) {

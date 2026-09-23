@@ -17,6 +17,7 @@
 #include "net_compat.hxx"
 
 #include <chrono>
+#include <map>
 #include <memory>
 #include <random>
 #include <string>
@@ -45,6 +46,12 @@ namespace {
 	const int SPECTATOR_PORTS_PER_LOBBY = MAX_SPECTATORS_PER_LOBBY * 2;
 	const ULONGLONG EMPTY_LOBBY_TIMEOUT_MS = 90 * 1000;
 	const ULONGLONG RELAY_ENDPOINT_TIMEOUT_MS = 20 * 1000;
+	const ULONGLONG MAX_LOBBY_AGE_MS = 12ULL * 3600 * 1000;
+	const int MAX_LOBBIES_PER_IP = 2;
+	// Matchmaker datagrams per source address: a burst of this many, then
+	// this many per second. Anything over is dropped without a reply.
+	const double MATCHMAKER_BURST = 20;
+	const double MATCHMAKER_PER_SECOND = 5;
 
 	// No 0/O or 1/I/L, so a code read aloud or typed from a screenshot is
 	// never ambiguous.
@@ -115,21 +122,27 @@ namespace {
 		Endpoint eps[MAX_PLAYERS_PER_LOBBY];
 		uint64_t packets = 0;
 
-		// Addresses allowed to claim a slot, host byte order, refreshed from
-		// the lobby's session members. Without this the relay hands a slot to
-		// the first two addresses that send it anything, so a stranger spraying
-		// the relay ports could take a player's place, break the match, or have
-		// their packets forwarded into the other player's GGPO. Empty means
-		// "nobody has joined yet", and nothing is accepted.
-		std::vector<uint32_t> allowed;
+		// The two players' addresses in seat order (host byte order, 0 =
+		// empty). Slot i belongs to seat i; a seat change drops its slot.
+		std::vector<uint32_t> players = std::vector<uint32_t>(MAX_PLAYERS_PER_LOBBY, 0);
 		uint64_t rejected = 0;
 
 		bool IsAllowed(const sockaddr_in& from) const {
 			uint32_t ip = ntohl(from.sin_addr.s_addr);
-			for (size_t i = 0; i < allowed.size(); i++) {
-				if (allowed[i] == ip) return true;
+			for (size_t i = 0; i < players.size(); i++) {
+				if (ip != 0 && players[i] == ip) return true;
 			}
 			return false;
+		}
+
+		void SetPlayers(const std::vector<uint32_t>& seats) {
+			for (int i = 0; i < MAX_PLAYERS_PER_LOBBY; i++) {
+				uint32_t ip = (size_t)i < seats.size() ? seats[i] : 0;
+				if (players[i] != ip) {
+					players[i] = ip;
+					eps[i].used = false;
+				}
+			}
 		}
 
 		bool Open(uint16_t p) {
@@ -174,7 +187,7 @@ namespace {
 						// counter meant a refusal could be silently skipped, which
 						// is indistinguishable from the packet never arriving. That
 						// ambiguity is exactly what we are trying to resolve.
-						spdlog::info("relay :{} address query from {} REFUSED (not a member of this lobby)", port, Describe(from));
+						spdlog::debug("relay :{} address query from {} REFUSED (not a member of this lobby)", port, Describe(from));
 						continue;
 					}
 					char ip[INET_ADDRSTRLEN] = { 0 };
@@ -183,7 +196,7 @@ namespace {
 						{"ok", true}, {"ip", ip}, {"port", ntohs(from.sin_port)}
 					}.dump();
 					sendto(sock, out.c_str(), (int)out.size(), 0, (sockaddr*)&from, sizeof(from));
-					spdlog::info("relay :{} answered an address query from {}", port, Describe(from));
+					spdlog::debug("relay :{} answered an address query from {}", port, Describe(from));
 					continue;
 				}
 
@@ -204,12 +217,15 @@ namespace {
 						}
 						continue;
 					}
+					// The seat whose address this is; two players behind one
+					// address take the seats in order.
+					uint32_t ip = ntohl(from.sin_addr.s_addr);
 					for (int i = 0; i < MAX_PLAYERS_PER_LOBBY; i++) {
-						if (!eps[i].used) {
+						if (!eps[i].used && players[i] == ip) {
 							eps[i].used = true;
 							eps[i].addr = from;
 							idx = i;
-							spdlog::info("relay :{} learned player {} at {}", port, i + 1, Describe(from));
+							spdlog::debug("relay :{} learned player {} at {}", port, i + 1, Describe(from));
 							break;
 						}
 					}
@@ -250,6 +266,13 @@ namespace {
 		// Same membership check as the relay; see Relay::allowed.
 		std::vector<uint32_t> allowed;
 		uint64_t rejected = 0;
+
+		void SetAllowed(const std::vector<uint32_t>& members) {
+			if (members != allowed) {
+				allowed = members;
+				Clear();
+			}
+		}
 
 		bool IsAllowed(const sockaddr_in& from) const {
 			uint32_t ip = ntohl(from.sin_addr.s_addr);
@@ -293,7 +316,7 @@ namespace {
 					}
 					sender.used = true;
 					sender.addr = from;
-					spdlog::info("pipe :{} learned {} at {}", port, who, Describe(from));
+					spdlog::debug("pipe :{} learned {} at {}", port, who, Describe(from));
 				}
 				sender.lastSeen = now;
 				if (receiver.used) {
@@ -326,6 +349,9 @@ namespace {
 		std::string code;
 		std::string hash;
 		uint16_t sessionPort = 0;
+		std::string secret;
+		uint32_t creatorIp = 0;
+		ULONGLONG createdAt = 0;
 		std::unique_ptr<SessionServer> server;
 		Relay relay;
 		Pipe pipes[MAX_SPECTATORS_PER_LOBBY];
@@ -343,7 +369,16 @@ namespace {
 	};
 
 	std::vector<Lobby> g_lobbies;
-	std::mt19937 g_rng((unsigned)std::chrono::steady_clock::now().time_since_epoch().count());
+	std::random_device g_rng;
+
+	std::string NewSecret() {
+		static const char HEX[] = "0123456789abcdef";
+		std::string s;
+		for (int i = 0; i < 32; i++) {
+			s += HEX[g_rng() % 16];
+		}
+		return s;
+	}
 
 	std::string NewCode() {
 		for (;;) {
@@ -361,6 +396,29 @@ namespace {
 				return code;
 			}
 		}
+	}
+
+	struct Bucket {
+		double tokens = MATCHMAKER_BURST;
+		ULONGLONG last = 0;
+	};
+	std::map<uint32_t, Bucket> g_buckets;
+
+	bool AllowMatchmaker(const sockaddr_in& from, ULONGLONG now) {
+		if (g_buckets.size() > 50000) {
+			g_buckets.clear();
+		}
+		Bucket& b = g_buckets[ntohl(from.sin_addr.s_addr)];
+		if (b.last != 0) {
+			b.tokens += (now - b.last) * MATCHMAKER_PER_SECOND / 1000.0;
+			if (b.tokens > MATCHMAKER_BURST) b.tokens = MATCHMAKER_BURST;
+		}
+		b.last = now;
+		if (b.tokens < 1) {
+			return false;
+		}
+		b.tokens -= 1;
+		return true;
 	}
 
 	Lobby* FindByCode(const std::string& code) {
@@ -387,9 +445,13 @@ namespace {
 		l.active = false;
 		l.code.clear();
 		l.hash.clear();
+		l.secret.clear();
+		l.creatorIp = 0;
 		l.lastNonEmpty = now;
 		ClearRelays(l);
 		l.server->SetSidecarHash("");
+		l.server->SetJoinSecret("");
+		l.server->DisconnectAll();
 		l.server->ResetLobby();
 	}
 
@@ -404,7 +466,7 @@ namespace {
 			// while their ordinary matchmaking to this same port worked. Only
 			// the server can say whether the request ever arrived; without this
 			// line the two possibilities are indistinguishable.
-			spdlog::info("stun request from {}:{}", ip, ntohs(from.sin_port));
+			spdlog::debug("stun request from {}:{}", ip, ntohs(from.sin_port));
 			return { {"ok", true}, {"ip", ip}, {"port", ntohs(from.sin_port)} };
 		}
 		std::string op = req.value("op", "");
@@ -418,21 +480,38 @@ namespace {
 			return { {"ok", true}, {"lobbies", active}, {"capacity", NUM_LOBBIES}, {"version", SF4E_VERSION} };
 		}
 		if (op == "create") {
+			std::string hash = req.value("hash", "");
+			if (hash.empty()) {
+				return { {"ok", false}, {"error", "bad_request"} };
+			}
+			uint32_t ip = ntohl(from.sin_addr.s_addr);
+			int mine = 0;
+			for (auto& l : g_lobbies) {
+				if (l.active && l.creatorIp == ip) mine++;
+			}
+			if (mine >= MAX_LOBBIES_PER_IP) {
+				return { {"ok", false}, {"error", "server_full"} };
+			}
 			for (auto& l : g_lobbies) {
 				if (l.active) {
 					continue;
 				}
 				l.active = true;
 				l.code = NewCode();
-				l.hash = req.value("hash", "");
+				l.secret = NewSecret();
+				l.hash = hash;
+				l.creatorIp = ip;
+				l.createdAt = now;
 				l.lastNonEmpty = now;
 				ClearRelays(l);
+				l.server->DisconnectAll();
 				l.server->SetSidecarHash(l.hash);
+				l.server->SetJoinSecret(l.secret);
 				l.server->ResetLobby();
 				SessionServer::LogStat("lobby_created", { {"lobby", l.index} });
 				spdlog::info("lobby {} created: code {} session :{} relay :{} by {}",
 					l.index, l.code, l.sessionPort, l.relay.port, req.value("name", "?"));
-				return { {"ok", true}, {"code", l.code}, {"session_port", l.sessionPort} };
+				return { {"ok", true}, {"code", l.code}, {"session_port", l.sessionPort}, {"secret", l.secret} };
 			}
 			return { {"ok", false}, {"error", "server_full"} };
 		}
@@ -453,11 +532,11 @@ namespace {
 				return { {"ok", false}, {"error", "spectators_full"} };
 			}
 			std::string hash = req.value("hash", "");
-			if (!l->hash.empty() && !hash.empty() && hash != l->hash) {
+			if (hash.empty() || hash != l->hash) {
 				return { {"ok", false}, {"error", "version_mismatch"} };
 			}
 			spdlog::info("lobby {} ({}) {} lookup by {}", l->index, l->code, spectate ? "spectate" : "join", req.value("name", "?"));
-			return { {"ok", true}, {"code", l->code}, {"session_port", l->sessionPort} };
+			return { {"ok", true}, {"code", l->code}, {"session_port", l->sessionPort}, {"secret", l->secret} };
 		}
 		return { {"ok", false}, {"error", "bad_request"} };
 	}
@@ -502,6 +581,7 @@ int main(int argc, char** argv) {
 		l.server.reset(new SessionServer("sf4e-lobby-" + std::to_string(i), "", true, 3, roundTime));
 		l.server->SetRelayPort(FIRST_RELAY_PORT + i);
 		l.server->SetSpectatorRelayPorts(specBase, MAX_SPECTATORS_PER_LOBBY);
+		l.server->RequireJoinSecret(true);
 		if (l.server->Listen(l.sessionPort) != 0) {
 			spdlog::critical("could not listen on session port {}", l.sessionPort);
 			return 1;
@@ -538,6 +618,9 @@ int main(int argc, char** argv) {
 				break;
 			}
 			buf[n] = 0;
+			if (!AllowMatchmaker(from, now)) {
+				continue;
+			}
 			json reply;
 			try {
 				reply = HandleMatchmaker(json::parse(buf), now, from);
@@ -560,9 +643,9 @@ int main(int argc, char** argv) {
 			// actually know a player is who they say they are: they had to look
 			// the lobby code up and complete a session handshake to get here.
 			std::vector<uint32_t> members = l.server->MemberIPv4s();
-			l.relay.allowed = members;
+			l.relay.SetPlayers(l.server->PlayerIPv4s());
 			for (int k = 0; k < MAX_SPECTATORS_PER_LOBBY; k++) {
-				l.pipes[k].allowed = members;
+				l.pipes[k].SetAllowed(members);
 			}
 
 			l.relay.Pump(now);
@@ -575,6 +658,9 @@ int main(int argc, char** argv) {
 					l.lastNonEmpty = now;
 				}
 				else if (now - l.lastNonEmpty > EMPTY_LOBBY_TIMEOUT_MS) {
+					ResetLobby(l, now);
+				}
+				if (l.active && now - l.createdAt > MAX_LOBBY_AGE_MS) {
 					ResetLobby(l, now);
 				}
 			}

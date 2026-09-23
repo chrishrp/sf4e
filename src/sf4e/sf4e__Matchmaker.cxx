@@ -156,6 +156,9 @@ void Matchmaker::Poll() {
 	if (n <= 0) {
 		return;
 	}
+	if (from.sin_addr.s_addr != _server.sin_addr.s_addr || from.sin_port != _server.sin_port) {
+		return;
+	}
 	buf[n] = 0;
 
 	try {
@@ -163,6 +166,7 @@ void Matchmaker::Poll() {
 		if (reply.value("ok", false)) {
 			code = reply.value("code", "");
 			sessionPort = (uint16_t)reply.value("session_port", 0);
+			secret = reply.value("secret", "");
 			lobbiesInUse = reply.value("lobbies", lobbiesInUse);
 			capacity = reply.value("capacity", capacity);
 			serverVersion = reply.value("version", serverVersion);

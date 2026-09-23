@@ -46,7 +46,7 @@ if compgen -G "$libdir"/*.so* >/dev/null; then
 	sudo cp -a "$libdir"/*.so* /opt/sf4e/lib/
 fi
 
-sudo chown -R sf4e:sf4e /opt/sf4e
+sudo chown -R root:root /opt/sf4e
 sudo chmod 755 /opt/sf4e/LobbyServer
 
 echo "==> Writing /etc/systemd/system/sf4e-lobby.service"

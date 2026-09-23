@@ -274,6 +274,7 @@ int SessionClient::Step()
 			request.username = _name;
 			request.port = _ggpoPort;
 			request.spectator = _spectator;
+			request.secret = joinSecret;
 			json msg = request;
 			if (Send(msg, nullptr) != k_EResultOK) {
 				spdlog::warn("Client could send initial join request");
@@ -301,6 +302,7 @@ int SessionClient::Step()
 			case SessionProtocol::JoinResult::JR_NAME_TAKEN:
 				errType = ErrorType::SCE_JOIN_REJECTED_NAME_TAKEN;
 				break;
+			case SessionProtocol::JoinResult::JR_SECRET_INVALID:
 			case SessionProtocol::JoinResult::JR_REQUEST_INVALID:
 				errType = ErrorType::SCE_JOIN_REJECTED_REQUEST_INVALID;
 				break;

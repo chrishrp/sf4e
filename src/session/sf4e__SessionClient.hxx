@@ -65,6 +65,8 @@ namespace sf4e {
 
 		// Lobby data
 		std::string _name;
+		// From the matchmaker; sent with the join request.
+		std::string joinSecret;
 		bool _spectator = false;
 		SessionProtocol::LobbyData _lobbyData;
 		SessionProtocol::MatchData _matchData;

@@ -208,6 +208,7 @@ namespace sf4e {
 			JR_LOBBY_FULL = 2,
 			JR_NAME_TAKEN = 3,
 			JR_HASH_INVALID = 4,
+			JR_SECRET_INVALID = 5,
 		};
 
 		NLOHMANN_JSON_SERIALIZE_ENUM(JoinResult, {
@@ -215,7 +216,8 @@ namespace sf4e {
 			{JR_REQUEST_INVALID, "request_invalid"},
 			{JR_LOBBY_FULL, "lobby_full"},
 			{JR_NAME_TAKEN, "name_taken"},
-			{JR_HASH_INVALID, "hash_invalid"}
+			{JR_HASH_INVALID, "hash_invalid"},
+			{JR_SECRET_INVALID, "secret_invalid"}
 		})
 
 		struct SessionHelloMsg {
@@ -245,6 +247,7 @@ namespace sf4e {
 			std::string username;
 			uint16_t port;
 			bool spectator = false;
+			std::string secret;
 		};
 
 		struct LobbyReady {
@@ -407,7 +410,7 @@ namespace sf4e {
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(SessionHelloResp, type, cid);
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(SessionDataUpdate, type, lobbyData, matchData);
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(SessionJoinReject, type, result);
-		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(SessionJoinRequest, type, sidecarHash, username, port, spectator);
+		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(SessionJoinRequest, type, sidecarHash, username, port, spectator, secret);
 
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(LobbyReady, type);
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(LobbyAllReady, type);

@@ -24,6 +24,7 @@ namespace sf4e {
 		// Filled in on Done.
 		std::string code;
 		uint16_t sessionPort = 0;
+		std::string secret;
 
 		// The server as resolved by Configure(); the session client connects
 		// to this address on `sessionPort`.

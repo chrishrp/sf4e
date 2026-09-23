@@ -69,8 +69,18 @@ namespace sf4e {
 			const std::string& name,
 			const SteamNetworkingIPAddr& peerAddr,
 			SessionProtocol::ConnectionID& cid,
-			bool spectator
+			bool spectator,
+			const std::string& secret
 		);
+
+		// Handed out by the matchmaker with the lobby code; a join without it
+		// is refused when required. Empty + required = nobody can join.
+		std::string _joinSecret;
+		bool _requireJoinSecret = false;
+		int _desyncReports = 0;
+		// Every accepted connection and its IPv4, for the per-lobby and
+		// per-address caps.
+		std::map<HSteamNetConnection, uint32_t> _accepted;
 		void HandleResults(int loserSide);
 
 		// Once both players have offered an endpoint, hand each of them the
@@ -107,6 +117,13 @@ namespace sf4e {
 		// only learns endpoints from these, so a stranger spraying the relay
 		// ports cannot take a player's slot or inject packets into the match.
 		std::vector<uint32_t> MemberIPv4s() const;
+		// The two player seats in order (0 when empty or unknown).
+		std::vector<uint32_t> PlayerIPv4s() const;
+
+		void SetJoinSecret(const std::string& secret);
+		void RequireJoinSecret(bool required);
+		// Close every connection; used when a lobby is released or reused.
+		void DisconnectAll();
 
 		// Drop the remembered character picks (and readiness) after any change to
 		// who is in the lobby. The picks are indexed by side, so a join or a

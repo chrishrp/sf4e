@@ -2,7 +2,7 @@ cmake_minimum_required (VERSION 3.21)
 
 project (
     sf4e
-    VERSION 0.5.4
+    VERSION 0.5.5
     DESCRIPTION "A process-inspection and modification tool for the Steam release of Ultra Street Fighter 4."
     HOMEPAGE_URL "https://gitlab.com/adanducci/sf4e"
 )
@@ -231,6 +231,16 @@ install(
     "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE"
   DESTINATION "."
 )
+
+# License texts of the bundled dependencies, as their licenses require.
+file(GLOB _copyrights "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/share/*/copyright")
+foreach(_c ${_copyrights})
+  get_filename_component(_port "${_c}" DIRECTORY)
+  get_filename_component(_port "${_port}" NAME)
+  if(NOT _port MATCHES "^vcpkg-|^pkgconfig$")
+    install(FILES "${_c}" DESTINATION "licenses" RENAME "${_port}.txt")
+  endif()
+endforeach()
 
 set(CPACK_PACKAGE_NAME "${PROJECT_NAME}")
 set(CPACK_PACKAGE_VENDOR "The ${PROJECT_NAME} Dev Team")
