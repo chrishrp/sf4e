@@ -9,6 +9,7 @@
 #include "../Dimps/Dimps__Math.hxx"
 
 #include "sf4e__Game__Battle.hxx"
+#include "sf4e__Game__Battle__Chara.hxx"
 #include "sf4e__Game__Battle__Effect.hxx"
 #include "sf4e__Game__Battle__Hud.hxx"
 #include "sf4e__Game__Battle__System.hxx"
@@ -19,6 +20,8 @@ namespace rBattle = Dimps::Game::Battle;
 namespace fBattle = sf4e::Game::Battle;
 
 using fIUnit = sf4e::Game::Battle::IUnit;
+using fJobManager = sf4e::Game::Battle::JobManager;
+using rJobManager = Dimps::Game::Battle::JobManager;
 using rIUnit = Dimps::Game::Battle::IUnit;
 using SoundHandle = Dimps::Game::Battle::Sound::SoundHandle;
 using SoundReference = Dimps::Game::Battle::Sound::SoundReference;
@@ -42,6 +45,8 @@ std::map<
 std::map<rSoundPlayerManager*, std::vector<fSoundPlayerManager::DeferredSoundRequest>> fSoundPlayerManager::queuedStops;
 
 void fBattle::Install() {
+	JobManager::Install();
+	Chara::Install();
 	Effect::Install();
 	Hud::Install();
 	Sound::SoundPlayerManager::Install();
@@ -387,4 +392,18 @@ BOOL fSoundPlayerManager::CriPlayerAdapter::IsStillPlaying() {
 	}
 
 	return (this->*rSoundPlayerManager::CriPlayerAdapter::publicMethods.IsStillPlaying)();
+}
+void fJobManager::Install() {
+	BOOL (fJobManager::* _fStart)(int, int, int) = &Start;
+	DetourAttach((PVOID*)&rJobManager::publicMethods.Start, *(PVOID*)&_fStart);
+}
+
+// With workers, both fighters' per-frame jobs run at once, and a thrown
+// fighter's job reads the thrower's bones while the thrower's job rewrites
+// them. Where the victim lands then depends on thread timing, a few ULPs
+// apart on each PC, and the screen-edge clamp spreads that to both fighters.
+// Zero workers runs every job list in queue order on the game thread.
+BOOL fJobManager::Start(int workers, int jobs, int jobSize) {
+	spdlog::info("Battle jobs: running on the game thread (engine asked for {} workers)", workers);
+	return (this->*rJobManager::publicMethods.Start)(0, jobs, jobSize);
 }

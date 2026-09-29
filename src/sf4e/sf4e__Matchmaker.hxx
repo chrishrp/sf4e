@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 #include <cstdint>
 
 #include <winsock2.h>
@@ -36,7 +37,21 @@ namespace sf4e {
 		bool Configure(const std::string& hostPort);
 		bool IsConfigured() const;
 
-		void Create(const std::string& sidecarHash, const std::string& name);
+		void Create(const std::string& sidecarHash, const std::string& name, bool isPublic = false);
+		// One open public lobby as the server lists it. No addresses.
+		struct PublicLobby {
+			std::string code;
+			std::string title;
+			int players = 0;
+			int spectators = 0;
+			int age = 0;
+			bool full = false;      // both seats taken: watch only
+			int spectatorsMax = 0;
+			int serverIdx = -1;     // client-side: which entry of the baked server list answered
+		};
+		// Asks for the open public lobbies. Done with publicLobbies filled.
+		void List();
+		std::vector<PublicLobby> publicLobbies;
 		void Join(const std::string& lobbyCode, const std::string& sidecarHash, const std::string& name, bool spectate = false);
 		// Asks the server whether it is there. Done with `code` empty on
 		// success; `lobbiesInUse` and `capacity` are filled in.

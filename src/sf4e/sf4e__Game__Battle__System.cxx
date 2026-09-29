@@ -246,6 +246,17 @@ bool fSystem::bGgpoDuringIdle = true;
 bool fSystem::bMatchLeftIdle = false;
 int fSystem::nIdleFramesInTimeline = 0;
 bool fSystem::bSoakCharasPreset = false;
+sf4e::Pacing::Controller fSystem::pacer;
+bool fSystem::bPredictionStalled = false;
+bool fSystem::bFrameRateSettingWrong = false;
+std::vector<int> fSystem::soakCharaPool;
+
+int fSystem::PickSoakChara() {
+    if (soakCharaPool.empty()) {
+        return localRand() % 0x2c;
+    }
+    return soakCharaPool[localRand() % soakCharaPool.size()];
+}
 int fSystem::nIdemEveryFrames = 0;
 int fSystem::nIdemCounter = 0;
 bool fSystem::bSkipResetAfterMemento = false;
@@ -725,6 +736,7 @@ void fSystem::BattleUpdate() {
             }
         }
 
+        bPredictionStalled = (result == GGPO_ERRORCODE_PREDICTION_THRESHOLD);
         if (GGPO_SUCCEEDED(result)) {
             fPadSystem::Inputs ggpoInputs[2] = { {0, 0}, {0, 0} };
             int disconnect_flags = 0;
@@ -747,6 +759,17 @@ void fSystem::BattleUpdate() {
                         fSoundPlayerManager::SyncState();
                     }
                     CaptureSnapshot(_this);
+                    {
+                        int f = rSystem::GetNumFramesSimulated_FixedPoint(_this)->integral;
+                        if (f == 60 || f == 600 || f == 3600) {
+                            StateSnapshot probe;
+                            BuildSnapshot(_this, probe);
+                            spdlog::info("Snapshot probe @ frame {}: P1 action {} frame {}+{} posture {} timescale {}+{}; P2 action {} frame {}+{} posture {} timescale {}+{}",
+                                f,
+                                probe.chara[0].action, probe.chara[0].actionFrame.integral, probe.chara[0].actionFrame.fractional, probe.chara[0].posture, probe.chara[0].timeScale.integral, probe.chara[0].timeScale.fractional,
+                                probe.chara[1].action, probe.chara[1].actionFrame.integral, probe.chara[1].actionFrame.fractional, probe.chara[1].posture, probe.chara[1].timeScale.integral, probe.chara[1].timeScale.fractional);
+                        }
+                    }
 
                     // Network health, summarised over the whole ten-second
                     // window rather than sampled at one instant.
@@ -917,6 +940,7 @@ void fSystem::CloseBattle() {
         }
         nIdleFramesInTimeline = 0;
         nUntrackedIdleFrames = 0;
+        ResetPacing("match");
         ggpo_close_session(ggpo);
         ggpo = nullptr;
     }
@@ -926,6 +950,9 @@ void fSystem::CloseBattle() {
         if (saveStates[i].used) {
             SaveState::Free(&saveStates[i]);
         }
+    }
+    for (int i = 0; i < NUM_SAVE_STATES; i++) {
+        SaveState::Reclaim(&saveStates[i], "battle_close_sweep", i);
     }
 
     // Snapshots are per-battle. Leaving them around makes the next battle
@@ -1247,6 +1274,12 @@ static void __cdecl OnGgpoAssertFailed(const char* msg) {
 }
 
 void fSystem::StartGGPO(GGPOPlayer* inPlayers, int numPlayers, int port, int frameDelay, DWORD rngSeed) {
+    ResetPacing(nullptr);
+    {
+        char pacingEnv[8] = { 0 };
+        pacer.enabled = !(GetEnvironmentVariableA("SF4E_PACING", pacingEnv, sizeof(pacingEnv)) > 0 && pacingEnv[0] == '0');
+        spdlog::info("Pacing: {}", pacer.enabled ? "on (frames stretch or shrink by up to 3 ms to stay level with the other PC)" : "off (SF4E_PACING=0)");
+    }
     // Floor the delay here as well as in the menu. The lobby is one way in; the
     // debug overlay is another, and a stale settings file is a third. This is
     // the single point every path passes through, so it is the one place the
@@ -1255,6 +1288,10 @@ void fSystem::StartGGPO(GGPOPlayer* inPlayers, int numPlayers, int port, int fra
         spdlog::info("Input delay raised from {} to 1: at zero, every remote frame is a "
             "prediction and the game rolls back on all of them.", frameDelay);
         frameDelay = 1;
+    }
+    // A rematch must not build on a pool the previous teardown left behind.
+    for (int i = 0; i < NUM_SAVE_STATES; i++) {
+        SaveState::Reclaim(&saveStates[i], "start_ggpo", i);
     }
     // Re-capture the simulation FP mode fresh for this match.
     g_fpLogged = false;   // log the machine's FP word once per match
@@ -1357,6 +1394,11 @@ void fSystem::StartGGPO(GGPOPlayer* inPlayers, int numPlayers, int port, int fra
 }
 
 void fSystem::StartSpectating(unsigned short localport, int num_players, char* host_ip, unsigned short host_port, DWORD rngSeed) {
+    ResetPacing(nullptr);
+    pacer.enabled = false;
+    for (int i = 0; i < NUM_SAVE_STATES; i++) {
+        SaveState::Reclaim(&saveStates[i], "start_spectating", i);
+    }
     localPlayerHandle = GGPO_INVALID_HANDLE;
     for (int i = 0; i < MAX_SF4E_PROTOCOL_USERS; i++) {
         players[i].type = GGPO_PLAYERTYPE_SPECTATOR;
@@ -1543,8 +1585,66 @@ bool fSystem::ggpo_log_game_state(char* filename, unsigned char* buffer, int)
 
 void fSystem::ggpo_free_buffer(void* buffer)
 {
+    // The session destructor frees every slot, used or not; unused ones are null.
+    if (!buffer) {
+        return;
+    }
     SaveState* victim = (SaveState*)buffer;
     SaveState::Free(victim);
+}
+
+// Once per outer tick, never inside a GGPO callback: account for the shift the
+// limiter applied, sample how far ahead we run, and ask for the next shift.
+void fSystem::StepPacing() {
+    if (!ggpo || !pacer.enabled || localPlayerHandle == GGPO_INVALID_HANDLE || syncTest.bActive) {
+        return;
+    }
+    pacer.OnShiftApplied(sf4e::Platform::D3D::TakeAppliedShift());
+    if (bPredictionStalled) {
+        pacer.OnPredictionStall();
+    }
+    else {
+        for (int i = 0; i < MAX_SF4E_PROTOCOL_USERS; i++) {
+            if (players[i].type != GGPO_PLAYERTYPE_REMOTE) {
+                continue;
+            }
+            GGPONetworkStats stats;
+            if (GGPO_SUCCEEDED(ggpo_get_network_stats(ggpo, players[i].handle, &stats))) {
+                pacer.OnRiftSample(stats.timesync.local_frames_behind, stats.timesync.remote_frames_behind);
+            }
+            break;
+        }
+    }
+    // The limiter only runs under the game's fixed frame-rate setting. Without
+    // it there is nothing to shift, and GGPO's own frame skips stay in charge.
+    static int ticksWithoutLimiter = 0;
+    if (!sf4e::Platform::D3D::LimiterActive()) {
+        if (++ticksWithoutLimiter == 300) {
+            bFrameRateSettingWrong = true;
+            spdlog::warn("Pacing: the game's frame limiter has not run for 5 s (frame rate setting is not Fixed?); "
+                "time-sync corrections cannot be applied on this PC");
+        }
+        sf4e::Platform::D3D::RequestFrameShift(0.0);
+        return;
+    }
+    ticksWithoutLimiter = 0;
+    bFrameRateSettingWrong = false;
+    sf4e::Platform::D3D::RequestFrameShift(pacer.NextShiftMs());
+    if (pacer.samples > 0 && pacer.samples % 600 == 0) {
+        spdlog::info("Pacing: rift {:.2f} frames (peak {:.2f}), slowed {:.0f} ms, sped up {:.0f} ms, largest step {:.2f} ms, {} stalled ticks",
+            pacer.riftFrames, pacer.maxAbsRiftFrames, pacer.slowedMs, pacer.spedUpMs, pacer.maxShiftMs, pacer.stallTicks);
+    }
+}
+
+void fSystem::ResetPacing(const char* label) {
+    if (label && pacer.samples > 0) {
+        spdlog::info("Pacing ({}): slowed {:.0f} ms, sped up {:.0f} ms, largest step {:.2f} ms, rift peak {:.2f} frames, {} stalled ticks{}",
+            label, pacer.slowedMs, pacer.spedUpMs, pacer.maxShiftMs, pacer.maxAbsRiftFrames, pacer.stallTicks,
+            sf4e::Platform::D3D::LimiterActive() ? "" : " - the frame limiter never ran, so no correction could apply");
+    }
+    pacer.Reset();
+    bPredictionStalled = false;
+    sf4e::Platform::D3D::CancelFrameShift();
 }
 
 bool fSystem::ggpo_on_event_callback(GGPOEvent* info) {
@@ -1606,6 +1706,13 @@ bool fSystem::ggpo_on_event_callback(GGPOEvent* info) {
         *rSystem::GetReadyState(system) = rSystem::RS_ISLEAVING;
         break;
     case GGPO_EVENTCODE_TIMESYNC:
+        if (pacer.enabled && localPlayerHandle != GGPO_INVALID_HANDLE && sf4e::Platform::D3D::LimiterActive()) {
+            // Pacing repays the gap a few milliseconds per frame; a whole-frame
+            // skip on top of that would overshoot.
+            spdlog::info("GGPO: timesync recommends {} frames; pacing is on, no frames skipped (rift {:.2f} frames, outstanding {:.1f} ms)",
+                info->u.timesync.frames_ahead, pacer.riftFrames, pacer.outstandingMs);
+            break;
+        }
         // We are ahead of the opponent. Skip that many simulation frames so
         // they catch up, but keep rendering; the old Sleep() froze the whole
         // game for up to 130ms and read as stutter.
@@ -1617,10 +1724,10 @@ bool fSystem::ggpo_on_event_callback(GGPOEvent* info) {
 }
 
 fSystem::SaveState::SaveState() {
-    // There are at least 88 keys in every save state. The upper bound
-    // is unclear, but we can minimize memory allocation delays by
+    // Field logs show 89 to 91 keys in every save state; 96 covers that
+    // without reallocating on the first save.
     // reserving the lower bound.
-    keys.reserve(88);
+    keys.reserve(96);
 }
 
 std::map<int, std::pair<StateSnapshot, fSystem::StateSnapshotMeta>> fSystem::snapshotMap;
@@ -1729,6 +1836,17 @@ void fSystem::BuildSnapshot(rSystem* src, StateSnapshot& snapshot) {
         (a->*methods.GetUCTimeMax_FixedPoint)(&snapshot.chara[i].uctimemax);
         (a->*methods.GetComboDamage)(&snapshot.chara[i].combodamage);
         (a->*methods.GetDamage)(&snapshot.chara[i].damage);
+        snapshot.chara[i].action = (a->*methods.GetActionID)();
+        snapshot.chara[i].posture = (a->*methods.GetActionPosture)();
+        // These two hand the value back through a pointer. Start from zero
+        // and take the returned pointer when there is one, so a getter that
+        // does not fill the argument still yields the same bytes on both PCs.
+        FixedPoint frame = { 0, 0 };
+        FixedPoint* frameOut = (a->*methods.GetActionFrame)(&frame);
+        snapshot.chara[i].actionFrame = frameOut ? *frameOut : frame;
+        FixedPoint scale = { 0, 0 };
+        (src->*rSystem::publicMethods.GetUnitTimeScale_Fixed)(&scale, i);
+        snapshot.chara[i].timeScale = scale;
     }
 }
 
@@ -1785,12 +1903,13 @@ void CopyIntoPlace(fSystem::SaveState* src) {
 
 void Clear(fSystem::SaveState* victim) {
     for (auto iter = victim->keys.begin(); iter != victim->keys.end(); iter++) {
-        if (iter->first) {
+        if (iter->first && victim->ownsKeys) {
             (iter->first->*rKey::publicMethods.ClearKey)();
             memset(iter->first, 0, sizeof(rKey));
         }
     }
     victim->keys.clear();
+    victim->ownsKeys = true;
 
     // Restore all non-memento-key state to a sane default.
     victim->used = false;
@@ -1812,27 +1931,42 @@ void Clear(fSystem::SaveState* victim) {
 }
 
 void fSystem::SaveState::Free(SaveState* victim) {
-    SaveState tmp;
-
-    SaveState::Save(&tmp);
-
-    // Calls to clear SF4's mementos delegate those calls to the mementoable
-    // object. If the mementoable object pointer isn't valid, the key can't
-    // be cleared. This isn't relevant to SF4's training mode, because clearing
-    // is only ever done on re-initialization after a save, but manually
-    // clearing keys when releasing the state is necessary for GGPO to avoid
-    // memory leaks.
-    // 
-    // Copy the victim state into the engine. Once the victim state is copied,
-    // the mementoable object pointers in each key are valid, and each key can
-    // be safely cleared.
-    CopyIntoPlace(victim);
+    if (!victim) {
+        return;
+    }
+    // GGPO releases its oldest state before every save, so this runs once per
+    // simulated and once per re-simulated frame. It used to save the live game,
+    // restore the victim, clear it and restore the live game again: a full
+    // record and two full restores per frame. ClearKey only needs the victim's
+    // key installed, not its game state, so install each key just long enough
+    // to release it and put the live key back.
+    if (victim->ownsKeys) {
+        for (auto& entry : victim->keys) {
+            if (!entry.first) {
+                continue;
+            }
+            const rKey live = *entry.first;
+            *entry.first = entry.second;
+            (entry.first->*rKey::publicMethods.ClearKey)();
+            *entry.first = live;
+        }
+    }
+    victim->ownsKeys = false;
     Clear(victim);
+}
 
-    // Restore the state at the start of the function. We don't need to
-    // handle clearing the keys injected by this operation, because the
-    // SaveState managing the keys is short-lived.
-    CopyIntoPlace(&tmp);
+// Drop a slot's records without touching the engine. At the points that call
+// this (session start, post-teardown sweep) the objects the keys point at are
+// gone or belong to a fresh battle, so ClearKey through them is exactly what
+// must not happen.
+void fSystem::SaveState::Reclaim(SaveState* victim, const char* reason, int slotIndex) {
+    if (!victim->used && victim->keys.empty()) {
+        return;
+    }
+    spdlog::warn("SaveState: reclaiming leaked slot {} ({}) used={} keys={}",
+        slotIndex, reason ? reason : "?", victim->used, victim->keys.size());
+    victim->ownsKeys = false;
+    Clear(victim);
 }
 
 void fSystem::SaveState::Load(SaveState* src) {
@@ -2029,11 +2163,10 @@ void fSystem::SyncTestPickRandomCharacters() {
     if (!mode) {
         return;
     }
-    const int CHARA_COUNT = 0x2c;
     rVsModeSoak::ConfirmedPlayerConditions* conditions = rVsModeSoak::GetConfirmedPlayerConditions(mode);
     int picked[2] = { 0, 0 };
     for (int i = 0; i < 2; i++) {
-        int id = localRand() % CHARA_COUNT;
+        int id = PickSoakChara();
         picked[i] = id;
         *(rVsModeSoak::ConfirmedPlayerConditions::GetCharaID(&conditions[i])) = (BYTE)id;
         *(rVsModeSoak::ConfirmedPlayerConditions::GetSideActive(&conditions[i])) = 1;

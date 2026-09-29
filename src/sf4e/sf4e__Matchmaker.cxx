@@ -97,13 +97,13 @@ void Matchmaker::Send(const std::string& payload) {
 	Poll();
 }
 
-void Matchmaker::Create(const std::string& sidecarHash, const std::string& name) {
+void Matchmaker::Create(const std::string& sidecarHash, const std::string& name, bool isPublic) {
 	if (!_configured) {
 		state = State::Failed;
 		error = "no server configured";
 		return;
 	}
-	json req = { {"op", "create"}, {"hash", sidecarHash}, {"name", name} };
+	json req = { {"op", "create"}, {"hash", sidecarHash}, {"name", name}, {"public", isPublic}, {"title", "lobby by " + name} };
 	Send(req.dump());
 }
 
@@ -114,6 +114,16 @@ void Matchmaker::Join(const std::string& lobbyCode, const std::string& sidecarHa
 		return;
 	}
 	json req = { {"op", "join"}, {"code", lobbyCode}, {"hash", sidecarHash}, {"name", name}, {"spectate", spectate} };
+	Send(req.dump());
+}
+
+void Matchmaker::List() {
+	if (!_configured) {
+		state = State::Failed;
+		error = "no server configured";
+		return;
+	}
+	json req = { {"op", "list"} };
 	Send(req.dump());
 }
 
@@ -170,6 +180,20 @@ void Matchmaker::Poll() {
 			lobbiesInUse = reply.value("lobbies", lobbiesInUse);
 			capacity = reply.value("capacity", capacity);
 			serverVersion = reply.value("version", serverVersion);
+			if (reply.contains("list") && reply["list"].is_array()) {
+				publicLobbies.clear();
+				for (const auto& e : reply["list"]) {
+					PublicLobby p;
+					p.code = e.value("code", "");
+					p.title = e.value("title", "");
+					p.players = e.value("players", 0);
+					p.spectators = e.value("spectators", 0);
+					p.age = e.value("age", 0);
+					p.full = e.value("full", false);
+					p.spectatorsMax = e.value("spectators_max", 0);
+					if (p.code.size() == 6) publicLobbies.push_back(p);
+				}
+			}
 			state = State::Done;
 			if (!code.empty()) {
 				spdlog::info("Matchmaker: lobby {} on session port {}", code, sessionPort);

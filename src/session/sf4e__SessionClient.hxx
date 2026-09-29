@@ -73,7 +73,7 @@ namespace sf4e {
 		int64_t _outstandingReadyRequestNumber = -1;
 		bool _snapshotsEnabled;
 
-		EResult Lobby_Ready();
+		EResult Lobby_Ready(int inputDelay);
 		EResult Lobby_ReportResults(int loserSide);
 
 		EResult PreBattle_SetEnv(uint32_t rngSeed);

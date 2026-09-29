@@ -348,6 +348,11 @@ namespace {
 		bool active = false;
 		std::string code;
 		std::string hash;
+		// Listed to anyone who asks when public. The title is all a stranger
+		// sees; the code lets them join, as if a friend had given it to them.
+		// Never the creator address.
+		bool isPublic = false;
+		std::string title;
 		uint16_t sessionPort = 0;
 		std::string secret;
 		uint32_t creatorIp = 0;
@@ -447,6 +452,8 @@ namespace {
 		l.hash.clear();
 		l.secret.clear();
 		l.creatorIp = 0;
+		l.isPublic = false;
+		l.title.clear();
 		l.lastNonEmpty = now;
 		ClearRelays(l);
 		l.server->SetSidecarHash("");
@@ -469,6 +476,14 @@ namespace {
 			spdlog::debug("stun request from {}:{}", ip, ntohs(from.sin_port));
 			return { {"ok", true}, {"ip", ip}, {"port", ntohs(from.sin_port)} };
 		}
+		// Printable ASCII only, bounded: shown to strangers and logged.
+		auto cleanText = [](std::string s, size_t cap) {
+			std::string out;
+			for (unsigned char c : s) {
+				if (c >= 0x20 && c <= 0x7e && out.size() < cap) out.push_back((char)c);
+			}
+			return out;
+		};
 		std::string op = req.value("op", "");
 		if (op == "ping") {
 			int active = 0;
@@ -484,10 +499,21 @@ namespace {
 			if (hash.empty()) {
 				return { {"ok", false}, {"error", "bad_request"} };
 			}
+			bool isPublic = req.value("public", false);
+			std::string title = cleanText(req.value("title", ""), 24);
+			if (title.empty()) {
+				std::string who = cleanText(req.value("name", ""), 16);
+				title = who.empty() ? "open lobby" : "lobby by " + who;
+			}
 			uint32_t ip = ntohl(from.sin_addr.s_addr);
+			// A lobby this address created and then left is still waiting out
+			// its empty timeout. Release it now rather than count it against
+			// the cap: two PCs behind one router hit it on their second try.
 			int mine = 0;
 			for (auto& l : g_lobbies) {
-				if (l.active && l.creatorIp == ip) mine++;
+				if (!l.active || l.creatorIp != ip) continue;
+				if (l.MemberCount() == 0) ResetLobby(l, now);
+				else mine++;
 			}
 			if (mine >= MAX_LOBBIES_PER_IP) {
 				return { {"ok", false}, {"error", "server_full"} };
@@ -502,6 +528,8 @@ namespace {
 				l.hash = hash;
 				l.creatorIp = ip;
 				l.createdAt = now;
+				l.isPublic = isPublic;
+				l.title = title;
 				l.lastNonEmpty = now;
 				ClearRelays(l);
 				l.server->DisconnectAll();
@@ -509,11 +537,28 @@ namespace {
 				l.server->SetJoinSecret(l.secret);
 				l.server->ResetLobby();
 				SessionServer::LogStat("lobby_created", { {"lobby", l.index} });
-				spdlog::info("lobby {} created: code {} session :{} relay :{} by {}",
-					l.index, l.code, l.sessionPort, l.relay.port, req.value("name", "?"));
+				spdlog::info("lobby {} created ({}): code {} session :{} relay :{} by {}",
+					l.index, isPublic ? "public" : "private", l.code, l.sessionPort, l.relay.port, req.value("name", "?"));
 				return { {"ok", true}, {"code", l.code}, {"session_port", l.sessionPort}, {"secret", l.secret} };
 			}
 			return { {"ok", false}, {"error", "server_full"} };
+		}
+		if (op == "list") {
+			// Open public lobbies. Codes are the join handle a friend would have
+			// typed; nothing about the creator leaves the server. Full lobbies
+			// drop off on their own.
+			json list = json::array();
+			for (auto& l : g_lobbies) {
+				if (!l.active || !l.isPublic || l.MemberCount() == 0) continue;
+				list.push_back({
+					{"code", l.code}, {"title", l.title},
+					{"players", l.PlayerCount()}, {"spectators", l.SpectatorCount()},
+					{"full", l.PlayerCount() >= MAX_PLAYERS_PER_LOBBY}, {"spectators_max", MAX_SPECTATORS_PER_LOBBY},
+					{"age", (int)((now - l.createdAt) / 1000)},
+				});
+				if (list.size() >= 20) break;
+			}
+			return { {"ok", true}, {"list", list} };
 		}
 		if (op == "join") {
 			std::string code = req.value("code", "");

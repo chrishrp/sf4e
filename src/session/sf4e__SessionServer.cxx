@@ -604,6 +604,14 @@ int SessionServer::Step()
 					continue;
 				}
 				_matchData.readyMessageNum[side] = pIncomingMsg->GetMessageNumber();
+				_matchData.inputDelay[side] = request.inputDelay;
+				if (_matchData.IsAllReady()) {
+					int a = _matchData.inputDelay[0] < 0 ? 0 : _matchData.inputDelay[0];
+					int b = _matchData.inputDelay[1] < 0 ? 0 : _matchData.inputDelay[1];
+					int shared = a > b ? a : b;
+					spdlog::info("Match delay {} frames (seats chose {} and {})", shared, a, b);
+					_matchData.inputDelay[0] = _matchData.inputDelay[1] = shared;
+				}
 				bSendLobbyAllReady = bSendLobbyAllReady || _matchData.IsAllReady();
 				_dataDirty = true;
 			}

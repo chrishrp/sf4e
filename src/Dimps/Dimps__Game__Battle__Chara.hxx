@@ -169,6 +169,11 @@ namespace Dimps {
 
 						float* (Actor::* GetCurrentRootPosition)();
 						float* (Actor::* GetCurrentBonePositionByID)(int boneID);
+
+						// The move in progress.
+						int (Actor::* GetActionID)();
+						Dimps::Math::FixedPoint* (Actor::* GetActionFrame)(Dimps::Math::FixedPoint* out);
+						int (Actor::* GetActionPosture)();
 					} __publicMethods;
 
 					typedef struct __staticMethods {
@@ -181,6 +186,22 @@ namespace Dimps {
 					static __staticMethods staticMethods;
 
 					// Instance values here
+				};
+
+				// A fighter's shadow (Genei Jin, Seiei Enbu, Soul Illusion...). An
+				// Action::Actor that overrides the memento interface; called through
+				// its IMementoable subobject at +0x60, key at +0x6b10.
+				struct Afterimage
+				{
+					typedef struct __mementoableMethods {
+						size_t (Afterimage::* GetMementoSize)();
+						int (Afterimage::* RecordToMemento)(void* memento, GameMementoKey::MementoID* id);
+						int (Afterimage::* RestoreFromMemento)(void* memento, GameMementoKey::MementoID* id);
+					} __mementoableMethods;
+
+					static void Locate(HMODULE peRoot);
+					static GameMementoKey* GetKey(Afterimage* mementoable);
+					static __mementoableMethods mementoableMethods;
 				};
 
 				struct Unit

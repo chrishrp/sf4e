@@ -17,12 +17,14 @@ namespace Battle = Dimps::Game::Battle;
 
 using Dimps::Eva::Task;
 using Battle::GameManager;
+using Battle::JobManager;
 using Battle::IUnit;
 using Battle::Sound::SoundPlayerManager;
 using SoundUnit = Battle::Sound::Unit;
 using Dimps::Platform::SoundObjectPool;
 
 GameManager::__publicMethods GameManager::publicMethods;
+JobManager::__publicMethods JobManager::publicMethods;
 IUnit::__publicMethods IUnit::publicMethods;
 SoundPlayerManager::__publicMethods SoundPlayerManager::publicMethods;
 SoundPlayerManager::__staticMethods SoundPlayerManager::staticMethods;
@@ -52,6 +54,7 @@ void Battle::Locate(HMODULE peRoot) {
 	Camera::Locate(peRoot);
 	Chara::Locate(peRoot);
 	Command::Locate(peRoot);
+	JobManager::Locate(peRoot);
 	GameManager::Locate(peRoot);
 	Effect::Locate(peRoot);
 	Hud::Locate(peRoot);
@@ -67,6 +70,11 @@ void IUnit::Locate(HMODULE peRoot) {
 	unsigned int peRootOffset = (unsigned int)peRoot;
 
 	*(PVOID*)&publicMethods.SharedHudUpdate = (PVOID)(peRootOffset + 0x18ae90);
+}
+
+void JobManager::Locate(HMODULE peRoot) {
+	unsigned int peRootOffset = (unsigned int)peRoot;
+	*(PVOID*)&publicMethods.Start = (PVOID)(peRootOffset + 0x138110);
 }
 
 void GameManager::Locate(HMODULE peRoot) {

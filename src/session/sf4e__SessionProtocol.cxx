@@ -55,10 +55,12 @@ namespace sf4e {
 
 		MatchData::MatchData()
 		{
+			inputDelay[0] = inputDelay[1] = -1;
 			Clear();
 		}
 
 		void MatchData::Clear() {
+			inputDelay[0] = inputDelay[1] = -1;
 			readyMessageNum[0] = -1;
 			readyMessageNum[1] = -1;
 			stageID = -1;
@@ -113,6 +115,9 @@ namespace sf4e {
 				FPF(recoverable); FPF(recoverablemax); FPF(super); FPF(supermax);
 				FPF(sctimeamt); FPF(sctimemax); FPF(uctime); FPF(uctimemax);
 				FPF(damage); FPF(combodamage);
+				FPF(actionFrame); FPF(timeScale);
+				add("action", std::to_string(m.action), std::to_string(r.action));
+				add("posture", std::to_string(m.posture), std::to_string(r.posture));
 				#undef FPF
 			}
 			// Soak-test diagnostic: which part of the GameManager forked. An
@@ -166,6 +171,11 @@ namespace sf4e {
 				FPD(recoverable); FPD(recoverablemax); FPD(super); FPD(supermax);
 				FPD(sctimeamt); FPD(sctimemax); FPD(uctime); FPD(uctimemax);
 				FPD(damage); FPD(combodamage);
+				FPD(actionFrame); FPD(timeScale);
+				#undef FPD
+				if (m.action != r.action) return true;
+				if (m.posture != r.posture) return true;
+				#define FPD(x)
 				#undef FPD
 				// rootPos is intentionally not checked: a derived render float.
 			}

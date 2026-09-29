@@ -137,7 +137,7 @@ struct AppInstance {
             c.PreBattle_SetChara(charaMsg.chara);
             c.PreBattle_SetEnv(envMsg.rngSeed);
             c.PreBattle_SetStage(stageMsg.stageID);
-            c.Lobby_Ready();
+            c.Lobby_Ready(2);
         }
     }
 

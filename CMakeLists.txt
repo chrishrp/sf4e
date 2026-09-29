@@ -2,7 +2,7 @@ cmake_minimum_required (VERSION 3.21)
 
 project (
     sf4e
-    VERSION 0.5.5
+    VERSION 1.0.0
     DESCRIPTION "A process-inspection and modification tool for the Steam release of Ultra Street Fighter 4."
     HOMEPAGE_URL "https://gitlab.com/adanducci/sf4e"
 )
@@ -96,6 +96,9 @@ add_library(sf4e STATIC
     "src/sf4e/sf4e__Game.cxx"
     "src/sf4e/sf4e__Game__Battle.hxx"
     "src/sf4e/sf4e__Game__Battle.cxx"
+    "src/sf4e/sf4e__Pacing.hxx"
+    "src/sf4e/sf4e__Game__Battle__Chara.hxx"
+    "src/sf4e/sf4e__Game__Battle__Chara.cxx"
     "src/sf4e/sf4e__Game__Battle__Effect.hxx"
     "src/sf4e/sf4e__Game__Battle__Effect.cxx"
     "src/sf4e/sf4e__Game__Battle__Hud.hxx"

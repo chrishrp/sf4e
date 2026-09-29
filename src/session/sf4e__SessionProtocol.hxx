@@ -138,6 +138,8 @@ namespace sf4e {
 			CharaConditions chara[2];
 			int64_t stageID;
 			uint32_t rngSeed;   // was DWORD; identical width, and portable
+			// Per seat as chosen; both stamped with the higher value once ready.
+			int32_t inputDelay[2];
 		};
 
 		enum MessageType {
@@ -252,6 +254,10 @@ namespace sf4e {
 
 		struct LobbyReady {
 			MessageType type = MT_LOBBY_READY;
+			// The delay this player chose. The server plays both seats at the
+			// higher of the two, so the fighter who chose less does not get
+			// responsive controls while the opponent absorbs the rollbacks.
+			int32_t inputDelay = -1;
 		};
 
 		struct LobbyAllReady {
@@ -362,6 +368,13 @@ namespace sf4e {
 				FixedPoint uctimemax;
 				FixedPoint damage;
 				FixedPoint combodamage;
+				// The move in progress: which action, its frame, the posture,
+				// and the unit time scale. A fork here shows frames before it
+				// reaches health or position.
+				int action;
+				FixedPoint actionFrame;
+				int posture;
+				FixedPoint timeScale;
 			};
 
 			int frameIdx;
@@ -404,7 +417,30 @@ namespace sf4e {
 
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(MemberData, connId, name, ip, port, spectator, watching, hostPort);
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(LobbyData, id, editionSelect, roundCount, roundTime, members);
-		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(MatchData, readyMessageNum, chara, stageID, rngSeed);
+		// Explicit rather than the macro: MatchData holds C arrays, which the
+		// _WITH_DEFAULT form cannot assign, and inputDelay must default when a
+		// server that predates it leaves the key out.
+		inline void to_json(nlohmann::json& j, const MatchData& m) {
+			j = nlohmann::json{
+				{"readyMessageNum", m.readyMessageNum},
+				{"chara", m.chara},
+				{"stageID", m.stageID},
+				{"rngSeed", m.rngSeed},
+				{"inputDelay", m.inputDelay},
+			};
+		}
+		inline void from_json(const nlohmann::json& j, MatchData& m) {
+			j.at("readyMessageNum").get_to(m.readyMessageNum);
+			j.at("chara").get_to(m.chara);
+			j.at("stageID").get_to(m.stageID);
+			j.at("rngSeed").get_to(m.rngSeed);
+			if (j.contains("inputDelay")) {
+				j.at("inputDelay").get_to(m.inputDelay);
+			}
+			else {
+				m.inputDelay[0] = m.inputDelay[1] = -1;
+			}
+		}
 
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(SessionHelloMsg, type);
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(SessionHelloResp, type, cid);
@@ -412,7 +448,7 @@ namespace sf4e {
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(SessionJoinReject, type, result);
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(SessionJoinRequest, type, sidecarHash, username, port, spectator, secret);
 
-		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(LobbyReady, type);
+		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(LobbyReady, type, inputDelay);
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(LobbyAllReady, type);
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(LobbyReportResults, type, loserSide);
 
@@ -424,7 +460,7 @@ namespace sf4e {
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(PreBattleSetStage, type, stageID);
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ForwardMessage, type, src, dest, msg);
 
-		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(StateSnapshot::CharaStateSnapshot, status, rootPos, side, vit, vitmax, revenge, revengemax, recoverable, recoverablemax, super, supermax, sctimeamt, sctimemax, uctime, uctimemax, damage, combodamage);
+		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(StateSnapshot::CharaStateSnapshot, status, rootPos, side, vit, vitmax, revenge, revengemax, recoverable, recoverablemax, super, supermax, sctimeamt, sctimemax, uctime, uctimemax, damage, combodamage, action, actionFrame, posture, timeScale);
 		// (StateSnapshot itself is defined below with battleFlow included.)
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(StateSnapshot, frameIdx, battleFlow, battleFlowSubstate, gmChunks, chara);
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(BattleSnapshot, type, snapshot);

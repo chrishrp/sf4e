@@ -16,6 +16,15 @@ namespace sf4e {
 			void Destroy();
 			DWORD Reset();
 			void RunScene_Render(void* sceneCommandList);
+			int LimitFrame(float frameDelta);
+
+			// Time-sync pacing hand-off with the game tick. A request applies to
+			// the next limiter call (positive: longer frame); Take returns what
+			// the limiter really changed since the last take.
+			static void RequestFrameShift(double ms);
+			static double TakeAppliedShift();
+			static void CancelFrameShift();
+			static bool LimiterActive();
 		};
 
 		struct GFxApp : Dimps::Platform::GFxApp

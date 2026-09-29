@@ -156,11 +156,18 @@ void fUserApp::_OnVsBattleTasksRegistered()
                 }
             }
         }
+        int matchDelay = netplay->client._matchData.inputDelay[0];
+        if (matchDelay < 0) {
+            matchDelay = netplay->delay;
+        }
+        else if (matchDelay != (int)netplay->delay) {
+            spdlog::info("Input delay {} for this match (you chose {}; the higher choice is used for both)", matchDelay, (int)netplay->delay);
+        }
         fSystem::StartGGPO(
             players,
             numPlayers,
             netplay->client._ggpoPort,
-            netplay->delay,
+            matchDelay,
             netplay->client._matchData.rngSeed
         );
     }
@@ -309,6 +316,7 @@ void fUserApp::Steam_PostUpdate() {
     if (fSystem::ggpo) {
         ggpo_idle(fSystem::ggpo, 1);
     }
+    fSystem::StepPacing();
 
     rUserApp::staticMethods.Steam_PostUpdate();
 }

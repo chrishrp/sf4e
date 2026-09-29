@@ -109,24 +109,6 @@ diff -ruN a/src/lib/ggpo/backends/spectator.h b/src/lib/ggpo/backends/spectator.
     GameInput             _inputs[SPECTATOR_FRAME_BUFFER_SIZE];
  };
  
-diff -ruN a/src/lib/ggpo/network/udp_proto.cpp b/src/lib/ggpo/network/udp_proto.cpp
---- a/src/lib/ggpo/network/udp_proto.cpp	2026-09-09 16:04:49.148087800 +0200
-+++ b/src/lib/ggpo/network/udp_proto.cpp	2026-09-09 16:27:18.048577300 +0200
-@@ -101,6 +101,14 @@
-           * (better, but still ug).  For the meantime, make this queue really big to decrease
-           * the odds of this happening...
-           */
-+         if (_pending_output.size() >= 56) {
-+            // A spectator that stopped acking. Dropping it beats the assert
-+            // that would take the whole game down.
-+            Log("pending output full for queue %d; disconnecting it.\n", _queue);
-+            Disconnect();
-+            QueueEvent(Event(Event::Disconnected));
-+            return;
-+         }
-          _pending_output.push(input);
-       }
-       SendPendingOutput();
 diff -ruN a/src/lib/ggpo/network/udp_proto.h b/src/lib/ggpo/network/udp_proto.h
 --- a/src/lib/ggpo/network/udp_proto.h	2026-09-09 16:04:49.133580000 +0200
 +++ b/src/lib/ggpo/network/udp_proto.h	2026-09-09 16:04:49.239885900 +0200

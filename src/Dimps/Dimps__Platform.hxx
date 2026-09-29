@@ -83,6 +83,9 @@ namespace Dimps {
 				void(D3D::* Destroy)();
 				DWORD (D3D::* Reset)();
 				void (D3D::* RunScene_Render)(void* pList);
+				// The fixed-rate frame limiter, run after Present: spins until one
+				// period after its previous exit, then records the exit.
+				int (D3D::* LimitFrame)(float frameDelta);
 			} __privateMethods;
 
 			typedef struct __publicMethods {
@@ -97,6 +100,15 @@ namespace Dimps {
 			static __privateMethods privateMethods;
 			static __publicMethods publicMethods;
 			static __staticMethods staticMethods;
+
+			// Limiter bookkeeping: QPC ticks of its last exit, and the period in
+			// seconds (1/60 under the fixed frame-rate setting).
+			static unsigned long long* GetLastLimiterExit(D3D* d) {
+				return (unsigned long long*)((unsigned int)d + 0x1f0);
+			}
+			static float* GetFramePeriodSeconds(D3D* d) {
+				return (float*)((unsigned int)d + 0x1f8);
+			}
 
 			// Instance values here
 			void* vtable;

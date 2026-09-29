@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <memory>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
@@ -25,6 +26,7 @@
 
 #include "sf4e.hxx"
 #include "sf4e__Lobby.hxx"
+#include "sf4e__Game__Battle__System.hxx"
 #include "sf4e__Matchmaker.hxx"
 #include "sf4e__Pad.hxx"
 #include "sf4e__UserApp.hxx"
@@ -62,6 +64,7 @@ namespace {
 		SC_CAPTURE,     // press Start on the controller you want to use
 		SC_HOME,
 		SC_JOIN,
+		SC_BROWSE,      // open public lobbies, refreshed every few seconds
 		SC_CONNECTING,  // matchmaker + session connect in flight
 		SC_LOBBY,
 		SC_RESULT,      // after a match: rematch / change character / leave
@@ -87,7 +90,7 @@ namespace {
 	char g_name[32] = { 0 };
 	uint8_t g_deviceIdx = 0xff;
 	uint8_t g_deviceType = 0xff;
-	// Zero delay means every remote frame is a prediction, so at any real ping
+	// ZeroLeft/Right: public/private | server | delay | connection     B: back to gamemeans every remote frame is a prediction, so at any real ping
 	// the game rolls back constantly -- measured at 90 ms, the opponent sits 5-6
 	// frames behind and every one of those is re-simulated. One frame is the
 	// floor: it costs 16 ms and removes a whole class of avoidable rollback.
@@ -97,7 +100,7 @@ namespace {
 	uint16_t g_localGgpoPort = 23457;
 
 	int g_homeCursor = 0;
-	const int HOME_ITEMS = 6;
+	const int HOME_ITEMS = 7;
 
 	// Peer-to-peer by default, with the server relay as the fallback both when
 	// the player chooses it and whenever a direct path cannot be opened.
@@ -136,6 +139,19 @@ namespace {
 	// last chosen on that PC -- which is exactly the ambiguity to remove.
 	int g_delayOverride = -1;
 
+	// Public by default: a lobby nobody can find only helps with a friend
+	// already waiting, and the point of the list is strangers.
+	bool g_public = true;
+	bool g_fromBrowse = false;
+	std::vector<sf4e::Matchmaker::PublicLobby> g_browse;
+	int g_browseCursor = 0;
+	bool g_listInFlight = false;
+	ULONGLONG g_lastListAt = 0;
+	// The list spans every region at once: one matchmaker per server, each
+	// answering on its own socket, merged in server order.
+	std::vector<std::unique_ptr<sf4e::Matchmaker>> g_browseMm;
+	std::vector<std::vector<sf4e::Matchmaker::PublicLobby>> g_browseBy;
+
 	void LoadSettings() {
 		wchar_t path[MAX_PATH];
 		SettingsPath(path);
@@ -152,6 +168,7 @@ namespace {
 			}
 			else if (sscanf_s(line, "server=%d", &v) == 1 && v >= 0) g_serverIdx = v;
 			else if (sscanf_s(line, "direct=%d", &v) == 1) g_directOptIn = (v != 0);
+			else if (sscanf_s(line, "public=%d", &v) == 1) g_public = (v != 0);
 		}
 		fclose(f);
 		// The saved index may point past a shorter server list on this build.
@@ -167,7 +184,7 @@ namespace {
 		if (path[0] == 0) return;
 		FILE* f = _wfopen(path, L"w");
 		if (f == nullptr) return;
-		fprintf(f, "delay=%d\nserver=%d\ndirect=%d\n", g_delay, g_serverIdx, g_directOptIn ? 1 : 0);
+		fprintf(f, "delay=%d\nserver=%d\ndirect=%d\npublic=%d\n", g_delay, g_serverIdx, g_directOptIn ? 1 : 0, g_public ? 1 : 0);
 		fclose(f);
 	}
 
@@ -216,6 +233,14 @@ namespace {
 			dl->AddRectFilled(a, ImVec2(a.x + w, a.y + h / 3), IM_COL32(0, 0, 0, 255));
 			dl->AddRectFilled(ImVec2(a.x, a.y + h / 3), ImVec2(a.x + w, a.y + h * 2 / 3), IM_COL32(221, 0, 0, 255));
 			dl->AddRectFilled(ImVec2(a.x, a.y + h * 2 / 3), ImVec2(a.x + w, a.y + h), IM_COL32(255, 206, 0, 255));
+		}
+		else if (n.find("usa") != std::string::npos || n.find("united") != std::string::npos || n.find("america") != std::string::npos) {
+			dl->AddRectFilled(a, ImVec2(a.x + w, a.y + h), IM_COL32(255, 255, 255, 255));
+			float s = h / 13.0f;
+			for (int i = 0; i < 13; i += 2) {
+				dl->AddRectFilled(ImVec2(a.x, a.y + i * s), ImVec2(a.x + w, a.y + (i + 1) * s), IM_COL32(178, 34, 52, 255));
+			}
+			dl->AddRectFilled(a, ImVec2(a.x + w * 0.4f, a.y + 7 * s), IM_COL32(60, 59, 110, 255));
 		}
 		else {
 			dl->AddRectFilled(a, ImVec2(a.x + w, a.y + h), IM_COL32(120, 120, 120, 255));
@@ -615,7 +640,7 @@ namespace {
 			c.PreBattle_SetEnv(sf4e::localRand());
 			c.PreBattle_SetStage(g_stage);
 		}
-		c.Lobby_Ready();
+		c.Lobby_Ready(g_delay);
 		g_sentReady = true;
 	}
 
@@ -662,7 +687,17 @@ namespace {
 	int g_serverStatus = -1;        // -1 checking, 0 unreachable, 1 online
 	bool g_pingInFlight = false;
 
+	// The frames-per-second setting must be Fixed for frame pacing to work.
+	// The game finds out a few seconds into a match; say so where the player
+	// will read it, until a match runs with the right setting.
+	void DrawSettingWarning(ImDrawList* dl, ImVec2 ds) {
+		if (!sf4e::Game::Battle::System::bFrameRateSettingWrong) return;
+		TextCentered(dl, g_fontBody, 24, ds.x * 0.5f, ds.y - 160,
+			"Set FRAMES PER SECOND to FIXED in the game's graphics options. Netplay runs smoother and stays in sync.", RED);
+	}
+
 	void DrawHome(ImDrawList* dl, ImVec2 ds, const Input& in) {
+		DrawSettingWarning(dl, ds);
 		EnsureMatchmaker();
 		if (g_serverStatus < 0 && !g_pingInFlight && g_mm.IsConfigured()) {
 			g_mm.Ping();
@@ -714,14 +749,16 @@ namespace {
 		}
 		char connLabel[64];
 		snprintf(connLabel, sizeof(connLabel), "CONNECTION   <  %s  >", g_directOptIn ? "PEER TO PEER" : "SERVER RELAY");
-		const char* items[HOME_ITEMS] = { "CREATE LOBBY", "JOIN WITH CODE", serverLabel, delayLabel, connLabel, "BACK TO GAME" };
+		char createLabel[48];
+		snprintf(createLabel, sizeof(createLabel), "CREATE LOBBY   <  %s  >", g_public ? "PUBLIC" : "PRIVATE");
+		const char* items[HOME_ITEMS] = { createLabel, "BROWSE PUBLIC LOBBIES", "JOIN WITH CODE", serverLabel, delayLabel, connLabel, "BACK TO GAME" };
 		float y = ds.y * 0.36f;
 		for (int i = 0; i < HOME_ITEMS; i++) {
 			bool sel = i == g_homeCursor;
 			if (sel) Slant(dl, ImVec2(40, y - 6), ImVec2(560, y + 52), RED);
 			TextOutlined(dl, g_fontHead, 40, ImVec2(80, y), items[i], sel ? PAPER : PAPER_DIM);
 			// Flag beside the server row, so the region is readable at a glance.
-			if (i == 2 && !g_servers.empty()) {
+			if (i == 3 && !g_servers.empty()) {
 				float tw = TextSize(g_fontHead, 40, items[i]).x;
 				DrawFlag(dl, ImVec2(80 + tw + 18, y + 8), 38, 26, g_servers[g_serverIdx].name);
 			}
@@ -737,8 +774,13 @@ namespace {
 
 		if (in.up) g_homeCursor = (g_homeCursor + HOME_ITEMS - 1) % HOME_ITEMS;
 		if (in.down) g_homeCursor = (g_homeCursor + 1) % HOME_ITEMS;
+		if (g_homeCursor == 0 && (in.left || in.right)) {
+			g_public = !g_public;
+			Flash(g_public ? "Public: anyone can see and join this lobby from the list" : "Private: only someone with the code can join", true);
+			SaveSettings();
+		}
 		// Row 2 switches server, row 3 the input delay.
-		if (g_homeCursor == 2 && g_servers.size() > 1) {
+		if (g_homeCursor == 3 && g_servers.size() > 1) {
 			int prev = g_serverIdx;
 			if (in.left)  g_serverIdx = (g_serverIdx + (int)g_servers.size() - 1) % (int)g_servers.size();
 			if (in.right) g_serverIdx = (g_serverIdx + 1) % (int)g_servers.size();
@@ -753,12 +795,12 @@ namespace {
 				SaveSettings();
 			}
 		}
-		if (g_homeCursor == 3) {
+		if (g_homeCursor == 4) {
 			if (in.left && g_delay > MIN_DELAY) g_delay--;
 			if (in.right && g_delay < MAX_DELAY) g_delay++;
 			if (in.left || in.right) SaveSettings();
 		}
-		if (g_homeCursor == 4 && (in.left || in.right)) {
+		if (g_homeCursor == 5 && (in.left || in.right)) {
 			g_directOptIn = !g_directOptIn;
 			// Flip it back off the moment it is turned off mid-session, so a
 			// player who changes their mind is not left offering an address.
@@ -778,14 +820,21 @@ namespace {
 				if (g_serverStatus == 0) { Flash("That server is unreachable. Try the other one."); break; }
 				g_isCreator = true;
 				g_spectate = false;
-				g_mm.Create(sf4e::sidecarHash, g_name);
+				g_mm.Create(sf4e::sidecarHash, g_name, g_public);
 				g_screen = SC_CONNECTING;
 				break;
 			case 1:
-				g_code.clear(); g_joinCursor = 0; g_isCreator = false;
+				if (!g_mm.IsConfigured()) { Flash("No lobby server configured"); break; }
+				if (g_serverStatus == 0) { Flash("That server is unreachable. Try the other one."); break; }
+				g_mm.Cancel(); g_pingInFlight = false;
+				g_browse.clear(); g_browseCursor = 0; g_listInFlight = false; g_lastListAt = 0;
+				g_screen = SC_BROWSE;
+				break;
+			case 2:
+				g_code.clear(); g_joinCursor = 0; g_isCreator = false; g_fromBrowse = false;
 				g_screen = SC_JOIN;
 				break;
-			case 5:
+			case 6:
 				sf4e::Lobby::Close();
 				break;
 			}
@@ -861,6 +910,102 @@ namespace {
 		}
 	}
 
+	void DrawBrowse(ImDrawList* dl, ImVec2 ds, const Input& in) {
+		DrawHeader(dl, ds, "PUBLIC LOBBIES", "every region - joining one picks its server for you");
+		{
+			char fresh[64];
+			if (g_listInFlight) snprintf(fresh, sizeof(fresh), "refreshing...");
+			else if (g_lastListAt == 0) snprintf(fresh, sizeof(fresh), "");
+			else snprintf(fresh, sizeof(fresh), "live - refreshed %ds ago", (int)((GetTickCount64() - g_lastListAt) / 1000));
+			dl->AddText(g_fontSmall, 20, ImVec2(ds.x - 60 - TextSize(g_fontSmall, 20, fresh).x, 136), PAPER_DIM, fresh);
+		}
+		if (g_browseMm.size() != g_servers.size()) {
+			g_browseMm.clear(); g_browseBy.clear();
+			for (auto& s : g_servers) {
+				g_browseMm.emplace_back(new sf4e::Matchmaker());
+				g_browseMm.back()->Configure(s.addr.c_str());
+				g_browseBy.emplace_back();
+			}
+		}
+		ULONGLONG now = GetTickCount64();
+		if (!g_listInFlight && now - g_lastListAt > 3000) {
+			for (auto& m : g_browseMm) m->List();
+			g_listInFlight = true;
+			g_lastListAt = now;
+		}
+		if (g_listInFlight) {
+			bool pending = false;
+			for (size_t i = 0; i < g_browseMm.size(); i++) {
+				sf4e::Matchmaker& m = *g_browseMm[i];
+				if (m.state == sf4e::Matchmaker::State::Waiting) m.Poll();
+				if (m.state == sf4e::Matchmaker::State::Waiting) { pending = true; continue; }
+				if (m.state == sf4e::Matchmaker::State::Done) {
+					g_browseBy[i] = m.publicLobbies;
+					for (auto& e : g_browseBy[i]) e.serverIdx = (int)i;
+					m.Cancel();
+				}
+				else if (m.state == sf4e::Matchmaker::State::Failed) {
+					g_browseBy[i].clear();
+					m.Cancel();
+				}
+			}
+			if (!pending) g_listInFlight = false;
+			g_browse.clear();
+			for (auto& v : g_browseBy) g_browse.insert(g_browse.end(), v.begin(), v.end());
+			if (g_browseCursor >= (int)g_browse.size()) g_browseCursor = 0;
+		}
+		float y = ds.y * 0.30f;
+		if (g_browse.empty()) {
+			TextCentered(dl, g_fontHead, 34, ds.x * 0.5f, ds.y * 0.46f,
+				(g_lastListAt == 0 || g_listInFlight) ? "Looking for lobbies..." : "No public lobbies right now", PAPER_DIM);
+			TextCentered(dl, g_fontBody, 24, ds.x * 0.5f, ds.y * 0.46f + 50,
+				"Create one and it will appear here for everyone, in every region.", PAPER_DIM, false);
+		}
+		for (int i = 0; i < (int)g_browse.size(); i++) {
+			const auto& e = g_browse[i];
+			bool sel = i == g_browseCursor;
+			if (sel) Slant(dl, ImVec2(40, y - 6), ImVec2(ds.x - 40, y + 52), RED);
+			const std::string& region = (e.serverIdx >= 0 && e.serverIdx < (int)g_servers.size()) ? g_servers[e.serverIdx].name : std::string();
+			DrawFlag(dl, ImVec2(80, y + 8), 38, 26, region);
+			TextOutlined(dl, g_fontHead, 36, ImVec2(80 + 38 + 18, y), e.title.c_str(), sel ? PAPER : PAPER_DIM);
+			char meta[112];
+			snprintf(meta, sizeof(meta), "%s     %s     %d / 2 players     %d watching     open %d min",
+				region.c_str(), e.full ? "IN MATCH" : "WAITING", e.players, e.spectators, e.age / 60);
+			dl->AddText(g_fontSmall, 20, ImVec2(ds.x - 60 - TextSize(g_fontSmall, 20, meta).x, y + 12), sel ? PAPER : PAPER_DIM, meta);
+			y += 66;
+		}
+		DrawHint(dl, ds, "Up/Down: choose     A: join (open seat)     Y: watch     RB: refresh now     B: back");
+		if (in.rb && !g_listInFlight) g_lastListAt = 0;
+		int n = (int)g_browse.size();
+		if (n > 0) {
+			if (in.up) g_browseCursor = (g_browseCursor + n - 1) % n;
+			if (in.down) g_browseCursor = (g_browseCursor + 1) % n;
+		}
+		if (in.back) {
+			for (auto& m : g_browseMm) m->Cancel();
+			g_listInFlight = false; g_screen = SC_HOME; return;
+		}
+		if ((in.confirm || in.alt) && n > 0) {
+			const auto pick = g_browse[g_browseCursor];
+			bool watch = in.alt;
+			if (!watch && pick.full) { Flash("That match is already on. Press Y to watch it."); return; }
+			if (watch && pick.spectatorsMax > 0 && pick.spectators >= pick.spectatorsMax) { Flash("No spectator seats left in that lobby"); return; }
+			for (auto& m : g_browseMm) m->Cancel();
+			g_listInFlight = false;
+			if (pick.serverIdx >= 0 && pick.serverIdx < (int)g_servers.size() && pick.serverIdx != g_serverIdx) {
+				g_serverIdx = pick.serverIdx;
+				g_mm.Cancel(); g_pingInFlight = false; g_serverStatus = -1;
+				g_mm.Configure(g_servers[g_serverIdx].addr.c_str());
+				SaveSettings();
+				Flash(("Switched to the " + g_servers[g_serverIdx].name + " server for this lobby").c_str(), true);
+			}
+			g_code = pick.code;
+			g_spectate = watch; g_isCreator = false; g_fromBrowse = true;
+			g_mm.Join(g_code, sf4e::sidecarHash, g_name, watch);
+			g_screen = SC_CONNECTING;
+		}
+	}
+
 	void DrawConnecting(ImDrawList* dl, ImVec2 ds, const Input& in) {
 		DrawHeader(dl, ds, g_isCreator ? "CREATING LOBBY" : (g_spectate ? "JOINING AS SPECTATOR" : "JOINING"), nullptr);
 		g_mm.Poll();
@@ -874,7 +1019,7 @@ namespace {
 			TextCentered(dl, g_fontHead, 36, ds.x * 0.5f, ds.y * 0.44f, "COULD NOT CONNECT", RED);
 			TextCentered(dl, g_fontBody, 24, ds.x * 0.5f, ds.y * 0.44f + 54, g_mm.error.c_str(), PAPER_DIM, false);
 			DrawHint(dl, ds, "B: back");
-			if (in.back || in.confirm) g_screen = g_isCreator ? SC_HOME : SC_JOIN;
+			if (in.back || in.confirm) g_screen = g_isCreator ? SC_HOME : (g_fromBrowse ? SC_BROWSE : SC_JOIN);
 		}
 		else if (g_mm.state == sf4e::Matchmaker::State::Done) {
 			ConnectFromMatchmaker();
@@ -882,10 +1027,34 @@ namespace {
 		}
 	}
 
+	// The results screen used to run no keepalives and no re-offers, so a
+	// proven path could expire during the rematch prompt and re-pairing only
+	// began once a player walked back to the lobby screen. Same guarded calls
+	// the lobby screen makes; EnableDirect rate-limits itself.
+	void KeepDirectAlive(sf4e::SessionClient& c) {
+		if (!g_directOptIn || !g_mm.IsConfigured()) return;
+		sf4e::Matchmaker altMm;
+		SteamNetworkingIPAddr alt;
+		alt.Clear();
+		bool haveAlt = false;
+		for (size_t i = 0; i < g_servers.size(); i++) {
+			if ((int)i == g_serverIdx) continue;
+			if (altMm.Configure(g_servers[i].addr.c_str())) {
+				alt = altMm.serverAddr;
+				haveAlt = true;
+				break;
+			}
+		}
+		c.EnableDirect(g_mm.serverAddr, haveAlt ? &alt : nullptr);
+		c.PumpDirect();
+	}
+
 	void DrawResult(ImDrawList* dl, ImVec2 ds, const Input& in) {
 		bool draw = g_resultWinner < 0;
 		bool won = !draw && g_resultWinner == g_mySideAtResult;
 		DrawHeader(dl, ds, "MATCH OVER", nullptr);
+		DrawSettingWarning(dl, ds);
+		if (!g_spectate && fUserApp::netplay) KeepDirectAlive(fUserApp::netplay->client);
 
 		char who[64];
 		const char* verdict;
@@ -1376,6 +1545,7 @@ void sf4e::Lobby::Draw() {
 	case SC_CAPTURE: DrawCapture(dl, ds); break;
 	case SC_HOME: DrawHome(dl, ds, in); break;
 	case SC_JOIN: DrawJoin(dl, ds, in); break;
+	case SC_BROWSE: DrawBrowse(dl, ds, in); break;
 	case SC_CONNECTING: DrawConnecting(dl, ds, in); break;
 	case SC_LOBBY: DrawLobby(dl, ds, in); break;
 	case SC_RESULT: DrawResult(dl, ds, in); break;

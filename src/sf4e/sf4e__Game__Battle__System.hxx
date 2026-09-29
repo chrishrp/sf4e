@@ -5,6 +5,8 @@
 #include <utility>
 #include <vector>
 
+#include "sf4e__Pacing.hxx"
+
 #include <GameNetworkingSockets/steam/steamnetworkingtypes.h>
 #include <ggponet.h>
 
@@ -106,6 +108,10 @@ namespace sf4e {
 
 				struct SaveState {
 					bool used = false;
+					// False while the records point at payloads the engine owns: a scratch
+					// copy around a release, or a slot reclaimed after teardown. Clear then
+					// drops the records without calling into the engine.
+					bool ownsKeys = true;
 					std::vector<std::pair<GameMementoKey*, GameMementoKey>> keys;
 					std::map<
 						Dimps::Game::Battle::Sound::SoundPlayerManager::CriPlayerAdapter*,
@@ -151,6 +157,7 @@ namespace sf4e {
 					SaveState();
 
 					static void Free(SaveState* dst);
+					static void Reclaim(SaveState* victim, const char* reason, int slotIndex);
 					static void Save(SaveState* dst);
 					static void Load(SaveState* src);
 					static void ComputeChecksum(SaveState* s);
@@ -241,6 +248,18 @@ namespace sf4e {
 				// agree between two machines or their timelines differ in length.
 				static int nIdleFramesInTimeline;
 				static bool bSoakCharasPreset;
+				// Time-sync pacing: samples GGPO's frame advantage every tick and
+				// asks the frame limiter for a few milliseconds more or less.
+				static sf4e::Pacing::Controller pacer;
+				static bool bPredictionStalled;
+				// Set once a match has run without the frame limiter: the game's
+				// frames-per-second setting is not Fixed. Shown in the lobby.
+				static bool bFrameRateSettingWrong;
+				static void StepPacing();
+				static void ResetPacing(const char* label);
+				// Characters the sync test may pick (SF4E_SYNCTEST_CHARAS); empty = all.
+				static std::vector<int> soakCharaPool;
+				static int PickSoakChara();
 				static int nIdemEveryFrames;
 				static int nIdemCounter;
 				static void RunIdempotenceCheck();

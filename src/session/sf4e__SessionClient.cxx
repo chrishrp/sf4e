@@ -644,9 +644,10 @@ EResult SessionClient::Send(nlohmann::json& msg, int64_t* outMessageNum) {
 	);
 }
 
-EResult SessionClient::Lobby_Ready()
+EResult SessionClient::Lobby_Ready(int inputDelay)
 {
 	LobbyReady msg;
+	msg.inputDelay = inputDelay;
 	json j = msg;
 	EResult result = Send(j, &_outstandingReadyRequestNumber);
 	if (result != k_EResultOK) {
@@ -848,6 +849,33 @@ void SessionClient::PumpDirect() {
 
 bool SessionClient::TryDirectPath() {
 	_matchIsDirect = false;
+
+	// Prove the path NOW, together, instead of trusting what the last punch
+	// said. After a rematch the last punch usually ran while the other PC was
+	// still tearing down its match and port 23457 was held by its dying GGPO
+	// session, so it failed -- and that stale failure became the decision for
+	// the whole next match. Both sides reach this point at the same moment
+	// (both readied), so both punch sockets are open and the probes cross: the
+	// unproven side gets its last chance and the proven side reconfirms while
+	// answering the other side for the full window. This also converges the
+	// case where only one side had proven, which used to aim GGPO at two
+	// different places.
+	if (_directEnabled && _directPeerPort != 0 && _punch.IsOpen()) {
+		std::string ip;
+		uint16_t port = 0;
+		if (_punch.Punch(_directPeerIp, _directPeerPort, _directPeerLocalIp, _directPeerLocalPort,
+				_directToken, 5000, ip, port, true)) {
+			_provenIp = ip;
+			_provenPort = port;
+			_punchProven = true;
+			spdlog::info("Peer to peer: path proven at match start");
+		}
+		else if (_punchProven) {
+			_punchProven = false;
+			spdlog::info("Peer to peer: the path proven earlier did not answer at match start; "
+				"using the relay so both PCs agree");
+		}
+	}
 
 	// The path was proven in the lobby, the moment both players were paired,
 	// and kept alive since. Nothing to negotiate here -- just point GGPO at

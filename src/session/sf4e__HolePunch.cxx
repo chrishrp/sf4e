@@ -233,7 +233,7 @@ void HolePunch::CheckNatType(const sockaddr_in& secondServer, int timeoutMs) {
 bool HolePunch::Punch(const std::string& peerIp, uint16_t peerPort,
 	const std::string& peerLocalIp, uint16_t peerLocalPort,
 	const std::string& token, int timeoutMs,
-	std::string& chosenIp, uint16_t& chosenPort) {
+	std::string& chosenIp, uint16_t& chosenPort, bool matchStart) {
 	if (_sock == INVALID_SOCKET) {
 		return false;
 	}
@@ -283,14 +283,31 @@ bool HolePunch::Punch(const std::string& peerIp, uint16_t peerPort,
 	//
 	// Requiring an ACK to OUR OWN probe proves the round trip, so both sides
 	// agree or both fall back.
-	std::string probe = PUNCH_MAGIC + token;
+	// At match start the probe carries an extra mark. A keepalive from the
+	// results screen answers plain probes too, so a plain exchange proves
+	// reachability but not that the other PC has reached match start; only
+	// a marked probe does. Both sides reach match start whenever each finishes
+	// loading, seconds apart at worst, so the early side waits here for the
+	// late one instead of handing the port to GGPO on its own proof.
+	std::string probe = std::string(PUNCH_MAGIC) + (matchStart ? "M" : "") + token;
+	std::string plainProbe = PUNCH_MAGIC + token;
+	std::string matchProbe = std::string(PUNCH_MAGIC) + "M" + token;
 	std::string ack = std::string(PUNCH_MAGIC) + "A" + token;
 
 	DWORD deadline = GetTickCount() + timeoutMs;
 	DWORD nextSend = 0;
 	int sent = 0;
+	bool gotAck = false;    // they answered one of our probes
+	bool ackedPeer = false; // we answered one of theirs (a marked one at match start)
+	const char* which = nullptr;
+	// Set once the path is proven: a short stay to answer a retransmit, and,
+	// in the lobby, long enough for a peer that has not started yet.
+	DWORD settle = 0;
 
 	while ((int)(GetTickCount() - deadline) < 0) {
+		if (settle != 0 && (int)(GetTickCount() - settle) >= 0) {
+			break;
+		}
 		if ((int)(GetTickCount() - nextSend) >= 0) {
 			for (int i = 0; i < numCandidates; i++) {
 				sendto(_sock, probe.c_str(), (int)probe.size(), 0,
@@ -312,19 +329,23 @@ bool HolePunch::Punch(const std::string& peerIp, uint16_t peerPort,
 			continue;
 		}
 
-		// Their probe: answer it so they can prove their own round trip, and
-		// keep waiting for the answer to ours.
-		if ((size_t)n == probe.size() && memcmp(buf, probe.c_str(), probe.size()) == 0) {
+		const bool isPlain = (size_t)n == plainProbe.size() && memcmp(buf, plainProbe.c_str(), plainProbe.size()) == 0;
+		const bool isMarked = (size_t)n == matchProbe.size() && memcmp(buf, matchProbe.c_str(), matchProbe.size()) == 0;
+		if (isPlain || isMarked) {
+			// Their probe: answer it so they can prove their own round trip.
 			sendto(_sock, ack.c_str(), (int)ack.size(), 0, (const sockaddr*)&from, sizeof(from));
-			continue;
+			if (isMarked || !matchStart) {
+				if (!ackedPeer && settle != 0) {
+					// First answer they get from us: a retransmit, then go.
+					settle = GetTickCount() + 150;
+				}
+				ackedPeer = true;
+			}
 		}
-
-		// Their ack: our probes are arriving, and so are their replies. Only
-		// now is the path proven in both directions.
-		if ((size_t)n == ack.size() && memcmp(buf, ack.c_str(), ack.size()) == 0) {
-			// Only an address the peer offered may become the match endpoint;
-			// the port may differ from what the server observed, the host not.
-			const char* which = nullptr;
+		else if ((size_t)n == ack.size() && memcmp(buf, ack.c_str(), ack.size()) == 0) {
+			// Their ack: our probes arrive and so do their replies. Only an
+			// address the peer offered may become the match endpoint; the
+			// port may differ from what the server observed, the host not.
 			for (int i = 0; i < numCandidates; i++) {
 				if (from.sin_addr.s_addr == candidates[i].addr.sin_addr.s_addr) {
 					which = candidates[i].what;
@@ -337,30 +358,29 @@ bool HolePunch::Punch(const std::string& peerIp, uint16_t peerPort,
 			inet_ntop(AF_INET, &from.sin_addr, fromIp, sizeof(fromIp));
 			chosenIp = fromIp;
 			chosenPort = ntohs(from.sin_port);
-			// Keep answering their probes briefly: they may still be waiting
-			// for an ack of their own, and if they give up we end up split.
-			DWORD settle = GetTickCount() + 150;
-			while ((int)(GetTickCount() - settle) < 0) {
-				sockaddr_in f2 = { 0 };
-				int f2len = sizeof(f2);
-				int m = recvfrom(_sock, buf, sizeof(buf) - 1, 0, (sockaddr*)&f2, &f2len);
-				if (m > 0 && (size_t)m == probe.size() && memcmp(buf, probe.c_str(), probe.size()) == 0) {
-					sendto(_sock, ack.c_str(), (int)ack.size(), 0, (const sockaddr*)&f2, sizeof(f2));
-				}
-				else if (m <= 0) {
-					Sleep(5);
-				}
-			}
-
-			spdlog::info("Peer to peer: round trip proven via the {} address after {} rounds", which, sent);
-			return true;
+			gotAck = true;
 		}
-		// Anything else -- a stray datagram, someone spraying the port -- is
-		// ignored rather than treated as success.
+		else {
+			// A stray datagram, someone spraying the port: ignored.
+			continue;
+		}
+
+		if (settle == 0 && gotAck && (ackedPeer || !matchStart)) {
+			settle = GetTickCount() + (ackedPeer ? 150 : 1200);
+		}
 	}
 
-	spdlog::info("Peer to peer: no round trip from {} candidate(s) after {} rounds; using the server relay",
-		numCandidates, sent);
+	if (gotAck && (ackedPeer || !matchStart)) {
+		spdlog::info("Peer to peer: round trip proven via the {} address after {} rounds", which, sent);
+		return true;
+	}
+	if (gotAck) {
+		spdlog::info("Peer to peer: the other PC answered but never reached match start within {} ms; using the server relay", timeoutMs);
+	}
+	else {
+		spdlog::info("Peer to peer: no round trip from {} candidate(s) after {} rounds; using the server relay",
+			numCandidates, sent);
+	}
 	return false;
 }
 

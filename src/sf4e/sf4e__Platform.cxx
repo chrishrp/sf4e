@@ -1,5 +1,6 @@
 #include <chrono>
 #include <memory>
+#include <mutex>
 #include <vector>
 
 #include <windows.h>
@@ -20,6 +21,7 @@
 #include "../Dimps/Dimps__Platform.hxx"
 #include "sf4e.hxx"
 #include "sf4e__Platform.hxx"
+#include "sf4e__Pacing.hxx"
 #include "sf4e__UserApp.hxx"
 #include "sf4e__Overlay.hxx"
 #include "sf4e__Lobby.hxx"
@@ -58,7 +60,99 @@ void fD3D::Install() {
     void(fD3D:: * _fRunScene_Render)(void*) = &RunScene_Render;
     DetourAttach((PVOID*)&rD3D::privateMethods.Destroy, *(PVOID*)&_fDestroy);
     DetourAttach((PVOID*)&rD3D::privateMethods.Reset, *(PVOID*)&_fReset);
+    int (fD3D:: * _fLimitFrame)(float) = &LimitFrame;
     DetourAttach((PVOID*)&rD3D::privateMethods.RunScene_Render, *(PVOID*)&_fRunScene_Render);
+    DetourAttach((PVOID*)&rD3D::privateMethods.LimitFrame, *(PVOID*)&_fLimitFrame);
+}
+
+namespace {
+	// One frame shift from the game tick to the limiter, and what it applied
+	// back. The generation keeps a shift taken before a reset from being
+	// reported into the next session; the limiter may run on another thread.
+	struct FrameShift {
+		std::mutex m;
+		int requestUs = 0;
+		int appliedUs = 0;
+		unsigned generation = 0;
+		bool limiterRan = false;
+	} s_shift;
+
+	double QpcTickMs() {
+		static const double tickMs = [] {
+			LARGE_INTEGER f;
+			QueryPerformanceFrequency(&f);
+			return 1000.0 / (double)f.QuadPart;
+		}();
+		return tickMs;
+	}
+}
+
+// The limiter waits until one period after its own previous exit, so a wait
+// anywhere else in the frame only eats into that spin. Pacing therefore moves
+// the limiter's period for one frame and measures what it really changed.
+int fD3D::LimitFrame(float frameDelta) {
+	int requestUs = 0;
+	unsigned generation = 0;
+	{
+		std::lock_guard<std::mutex> lock(s_shift.m);
+		requestUs = s_shift.requestUs;
+		s_shift.requestUs = 0;
+		generation = s_shift.generation;
+	}
+	float* period = rD3D::GetFramePeriodSeconds(this);
+	const float savedPeriod = *period;
+	const unsigned long long previousExit = *rD3D::GetLastLimiterExit(this);
+	if (savedPeriod > 0.0f && previousExit != 0) {
+		std::lock_guard<std::mutex> lock(s_shift.m);
+		s_shift.limiterRan = true;
+	}
+	const double shiftMs = requestUs / 1000.0;
+	if (shiftMs == 0.0 || savedPeriod <= 0.0f || previousExit == 0) {
+		return (this->*rD3D::privateMethods.LimitFrame)(frameDelta);
+	}
+	LARGE_INTEGER now;
+	QueryPerformanceCounter(&now);
+	const double tickMs = QpcTickMs();
+	const double periodMs = savedPeriod * 1000.0;
+	const double elapsedMs = (double)(long long)(now.QuadPart - previousExit) * tickMs;
+	const float shiftedPeriod = (float)(sf4e::Pacing::ShiftedPeriodMs(periodMs, elapsedMs, shiftMs) / 1000.0);
+	*period = shiftedPeriod;
+	const int result = (this->*rD3D::privateMethods.LimitFrame)(frameDelta);
+	// A settings change made meanwhile wins over the restore.
+	if (*period == shiftedPeriod) {
+		*period = savedPeriod;
+	}
+	const double frameMs = (double)(long long)(*rD3D::GetLastLimiterExit(this) - previousExit) * tickMs;
+	const double appliedMs = sf4e::Pacing::AppliedShiftMs(periodMs, frameMs, shiftMs);
+	std::lock_guard<std::mutex> lock(s_shift.m);
+	if (generation == s_shift.generation) {
+		s_shift.appliedUs += (int)(appliedMs * 1000.0);
+	}
+	return result;
+}
+
+void fD3D::RequestFrameShift(double ms) {
+	std::lock_guard<std::mutex> lock(s_shift.m);
+	s_shift.requestUs = (int)(ms * 1000.0);
+}
+
+double fD3D::TakeAppliedShift() {
+	std::lock_guard<std::mutex> lock(s_shift.m);
+	const int applied = s_shift.appliedUs;
+	s_shift.appliedUs = 0;
+	return applied / 1000.0;
+}
+
+void fD3D::CancelFrameShift() {
+	std::lock_guard<std::mutex> lock(s_shift.m);
+	s_shift.requestUs = s_shift.appliedUs = 0;
+	s_shift.generation++;
+	s_shift.limiterRan = false;
+}
+
+bool fD3D::LimiterActive() {
+	std::lock_guard<std::mutex> lock(s_shift.m);
+	return s_shift.limiterRan;
 }
 
 void fD3D::RunScene_Render(void* sceneCommandList) {
@@ -266,6 +360,19 @@ int fMain::Initialize(void* a, void* b, void* c) {
                         sf4e::Game::Battle::System::syncTest.bSoak = true;
                         spdlog::warn("SOAK MODE: both sides play themselves with random inputs, a random "
                             "pairing every match, and the test re-arms itself. Start one VS match and leave it.");
+                    }
+                    // A comma-separated list of character IDs restricts the pairings,
+                    // e.g. 35,36,24 soaks the shadow moves (Yun, Yang, Rose).
+                    char charasEnv[128] = { 0 };
+                    if (GetEnvironmentVariableA("SF4E_SYNCTEST_CHARAS", charasEnv, sizeof(charasEnv)) > 0) {
+                        std::vector<int>& pool = sf4e::Game::Battle::System::soakCharaPool;
+                        for (char* p = strtok(charasEnv, ", "); p; p = strtok(nullptr, ", ")) {
+                            int id = atoi(p);
+                            if (id >= 0 && id < 0x2c) pool.push_back(id);
+                        }
+                        if (!pool.empty()) {
+                            spdlog::warn("SF4E_SYNCTEST_CHARAS: every match is drawn from {} character(s)", pool.size());
+                        }
                     }
                     spdlog::warn("SF4E_SYNCTEST is set: start VERSUS > player vs player and play a minute. "
                         "Results are written to this log when the match ends.");

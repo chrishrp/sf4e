@@ -1126,7 +1126,7 @@ void DrawNetworkLobbyPanel() {
 					}
 				}
 
-				fUserApp::netplay->client.Lobby_Ready();
+				fUserApp::netplay->client.Lobby_Ready((int)fUserApp::netplay->delay);
 			}
 		}
 
@@ -2361,7 +2361,7 @@ static void PumpSyncTestSoakRestart() {
 	// Characters runs at BATTLE start, which is far too late to load anyone.
 	for (int i = 0; i < 2; i++) {
 		mainMenuJumpCharaConditions[i] = { 0 };
-		mainMenuJumpCharaConditions[i].charaID = (BYTE)(sf4e::localRand() % 0x2c);
+		mainMenuJumpCharaConditions[i].charaID = (BYTE)fSystem::PickSoakChara();
 	}
 	mainMenuJumpCharaCount = 2;
 	mainMenuJumpStageID = (int)(sf4e::localRand() % 30);

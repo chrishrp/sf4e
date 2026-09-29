@@ -11,7 +11,19 @@ vcpkg_from_github(
         # reverted forced symmetric rollback off, and exposes the real
         # input-confirmation boundary.
         "sf4e-assert-confirmed-frame.patch"
+        "reject-invalid-udp-messages.patch"
+        "cache-log-config.patch"
+        "pending-output-disconnect.patch"
+        "disconnect-before-input.patch"
+        "input-gap-disconnect.patch"
+        "fast-quality-report.patch"
+        "stalled-input-repair.patch"
+        "init-round-trip-time.patch"
 )
+
+# stalled-input-repair.patch includes this header; it has to exist in the tree.
+configure_file("${CMAKE_CURRENT_LIST_DIR}/input-repair.h"
+    "${SOURCE_PATH}/src/lib/ggpo/network/input-repair.h" COPYONLY)
 
 vcpkg_cmake_configure(
     SOURCE_PATH ${SOURCE_PATH}
