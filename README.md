@@ -18,6 +18,35 @@ unmodified mirror of upstream so offset fixes can be pulled in directly.
 Upstream remains the authoritative source for the engine research. Please report engine
 or offset findings there as well, and see the original [CONTRIBUTING.md](CONTRIBUTING.md).
 
+### Credits
+
+Most of what makes 1.0 play well online was worked out first by the
+[SF4 Ember Netplay](https://github.com/Confetti3/SF4-Ember-Netplay) project. The analysis
+and the fixes below are theirs; this fork ports them, in its own code, and owes them the
+result:
+
+* the engine's threaded fighter update, which made throws land differently on each PC,
+  and the fix of running the battle jobs on the game thread;
+* the save-state release path (install the key, clear it, put the live key back) and the
+  clean save-state pool at session start;
+* the GGPO hardening patches in `vcpkg-ports/ggpo`: input repair, disconnect on missing or
+  gapped input, message validation, faster quality reports;
+* input delay shared between both players;
+* rollback for the shadow moves (Genei Jin, Seiei Enbu, Soul Illusion), whose actor state
+  the engine never saved;
+* continuous frame pacing through the game's fixed-rate limiter instead of skipping frames;
+* the extended desync check over each fighter's action and posture.
+
+## Playing online
+
+* **Set "frames per second" to Fixed** in the game's graphics options, on both PCs. Frame
+  pacing works through the fixed-rate limiter, and every other setting runs the simulation
+  on a slightly different clock, which desyncs the match. The game shows a notice on the
+  match-over screen when the setting is wrong. Never use Smooth.
+* Both players must run the same release. Joining someone on a different build is refused
+  with a message rather than failing silently.
+
+
 [TOC]
 
 ## Running

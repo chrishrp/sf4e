@@ -28,6 +28,13 @@ dangerous, it is only unsigned. Click **More info**, then **Run anyway**. Your
 antivirus may also warn, because the mod works by attaching to the game; that
 is expected. Unblocking the zip first (step 1) usually avoids all of this.
 
+## One game setting
+
+In the game, open **Options > Graphics** and set **frames per second** (**imágenes por
+segundo**) to **Fixed** (**Fija**), on both PCs. The netcode paces both games through the
+fixed-rate limiter; any other setting runs the simulation on a slightly different clock and
+the match desyncs. The mod tells you on the match-over screen if the setting is wrong.
+
 ## Staying up to date
 
 When the lobby screen shows **UPDATE AVAILABLE**, your build is older than the
