@@ -171,8 +171,10 @@ namespace sf4e {
 				FPD(recoverable); FPD(recoverablemax); FPD(super); FPD(supermax);
 				FPD(sctimeamt); FPD(sctimemax); FPD(uctime); FPD(uctimemax);
 				FPD(damage); FPD(combodamage);
-				FPD(actionFrame); FPD(timeScale);
 				#undef FPD
+				// The action frame and time scale carry sub-frame fractions that come
+				// from each PC's own frame timing; they are shown in the diff text but
+				// never decide a desync. The whole-number action and posture do.
 				if (m.action != r.action) return true;
 				if (m.posture != r.posture) return true;
 				#define FPD(x)
