@@ -1883,14 +1883,21 @@ void CopyIntoPlace(fSystem::SaveState* src) {
         managerIter++) {
         rSoundPlayerManager* stubManager = managerIter->first;
         rSoundPlayerManager::CriPlayerAdapter* adapters = *rSoundPlayerManager::GetAdapters(stubManager);
+        // Restore only what the state recorded. An adapter or manager that did
+        // not exist at save time is left alone instead of being zeroed.
         for (int i = 0; i < *rSoundPlayerManager::GetNumAdapters(stubManager); i++) {
-            fSoundPlayerManager::adapterToCurrentSound[&adapters[i]] = src->criPlayerState[&adapters[i]];
+            auto record = src->criPlayerState.find(&adapters[i]);
+            if (record != src->criPlayerState.end()) {
+                fSoundPlayerManager::adapterToCurrentSound[&adapters[i]] = record->second;
+            }
         }
-        sf4e::Platform::SoundObjectPool<4>::SaveState poolState;
-        sf4e::Platform::SoundObjectPool<4>::Load(
-            rSoundPlayerManager::GetAdapterPool(stubManager),
-            &src->managerState[stubManager]
-        );
+        auto poolRecord = src->managerState.find(stubManager);
+        if (poolRecord != src->managerState.end()) {
+            sf4e::Platform::SoundObjectPool<4>::Load(
+                rSoundPlayerManager::GetAdapterPool(stubManager),
+                &poolRecord->second
+            );
+        }
     }
 
     // Place each memento key back into its position.
@@ -1983,6 +1990,15 @@ void fSystem::SaveState::Reclaim(SaveState* victim, const char* reason, int slot
 
 void fSystem::SaveState::Load(SaveState* src) {
     std::vector<std::pair<rKey*, rKey>> tmpVec;
+
+    // A load abandons the current timeline, and with it the stops queued by
+    // frames about to be re-simulated. Re-simulation queues again whatever
+    // survives; a stale entry would cut a sound that should keep playing.
+    if (fSoundPlayerManager::bUsePureSounds) {
+        for (auto& queue : fSoundPlayerManager::queuedStops) {
+            queue.second.clear();
+        }
+    }
 
     // Copy and zero all currently tracked keys. It's possible that the
     // initialization detour started tracking keys that were only

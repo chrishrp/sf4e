@@ -88,11 +88,15 @@ namespace sf4e {
 				}
 				pool->activeTail = NULL;
 
-				for (auto activeIter = src->active.begin(); activeIter != src->active.end(); activeIter++) {
+				for (auto activeIter = src->active.begin(); activeIter != src->active.end() && pool->inactiveHead != NULL; activeIter++) {
 					Dimps::Platform::SoundObjectPoolEntry<N>* newActiveEntry = pool->inactiveHead;
 					pool->inactiveHead = newActiveEntry->next;
 					if (pool->inactiveHead == NULL) {
 						pool->inactiveTail = NULL;
+					}
+					else {
+						// The new head must not point back at an entry that is now active.
+						pool->inactiveHead->prev = NULL;
 					}
 					newActiveEntry->prev = pool->activeTail;
 					newActiveEntry->next = NULL;
@@ -113,7 +117,7 @@ namespace sf4e {
 				}
 
 				cursor = pool->inactiveHead;
-				for (auto inactiveIter = src->inactive.begin(); inactiveIter != src->inactive.end(); inactiveIter++) {
+				for (auto inactiveIter = src->inactive.begin(); inactiveIter != src->inactive.end() && cursor != NULL; inactiveIter++) {
 					cursor->handle = inactiveIter->handle;
 					cursor->field_0x4 = inactiveIter->field_0x4;
 					memcpy(cursor->data, inactiveIter->data, N);
@@ -122,6 +126,8 @@ namespace sf4e {
 			}
 
 			static void Save(Dimps::Platform::SoundObjectPool<N>* pool, SaveState* dst) {
+				dst->inactive.clear();
+				dst->active.clear();
 				Dimps::Platform::SoundObjectPoolEntry<N>* cursor;
 				for (cursor = pool->inactiveHead; cursor != NULL; cursor = cursor->next) {
 					SoundObjectPoolEntry<N>::SaveState entryState;

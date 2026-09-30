@@ -19,11 +19,6 @@ namespace sf4e {
 
 			void Install();
 
-			struct JobManager : Dimps::Game::Battle::JobManager {
-				static void Install();
-				BOOL Start(int workers, int jobs, int jobSize);
-			};
-
 			struct IUnit : Dimps::Game::Battle::IUnit {
 				// In order for the compiler to construct this method
 				// with __thiscall__, the method needs to be declared
@@ -34,6 +29,12 @@ namespace sf4e {
 				void SharedHudUpdate(Task** task);
 
 				static bool bAllowHudUpdate;
+			};
+
+			struct JobManager : Dimps::Game::Battle::JobManager {
+				static void Install();
+
+				BOOL Start(int workers, int jobs, int jobSize);
 			};
 
 			namespace Sound {
@@ -90,15 +91,6 @@ namespace sf4e {
 					void StopSound(SoundHandle adapterHandle, BOOL criParam);
 					void StopAll(BOOL criParam);
 					static void SyncState();
-				};
-
-				struct Unit : Dimps::Game::Battle::Sound::Unit {
-					BOOL IsStillPlaying(
-						uint32_t managerIdx,
-						uint32_t adapterHandle
-					);
-
-					static void Install();
 				};
 			}
 		}
