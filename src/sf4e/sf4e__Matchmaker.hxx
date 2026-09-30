@@ -61,6 +61,9 @@ namespace sf4e {
 
 		int lobbiesInUse = 0;
 		int capacity = 0;
+		// Players connected to a lobby, and people who looked in the last minute.
+		int playersOnline = 0;
+		int browsing = 0;
 		// The build the server reports on a ping ("a.b.c"), for the update
 		// notice. Empty if the server is too old to report it.
 		std::string serverVersion;

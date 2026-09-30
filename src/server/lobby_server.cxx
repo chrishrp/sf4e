@@ -458,8 +458,28 @@ namespace {
 		ClearRelays(l);
 		l.server->SetSidecarHash("");
 		l.server->SetJoinSecret("");
+		l.server->SetPublic(false);
 		l.server->DisconnectAll();
 		l.server->ResetLobby();
+	}
+
+	// Who is around right now: players connected to a lobby, and addresses that
+	// pinged or listed in the last minute. Kept in memory only, as a count.
+	std::map<uint32_t, ULONGLONG> g_recentBrowsers;
+	int CountBrowsing(uint32_t ip, ULONGLONG now) {
+		g_recentBrowsers[ip] = now;
+		for (auto it = g_recentBrowsers.begin(); it != g_recentBrowsers.end();) {
+			if (now - it->second > 60000) it = g_recentBrowsers.erase(it);
+			else ++it;
+		}
+		return (int)g_recentBrowsers.size();
+	}
+	int CountPlayers() {
+		int n = 0;
+		for (auto& l : g_lobbies) {
+			if (l.active) n += l.MemberCount();
+		}
+		return n;
 	}
 
 	json HandleMatchmaker(const json& req, ULONGLONG now, const sockaddr_in& from) {
@@ -492,7 +512,8 @@ namespace {
 					active++;
 				}
 			}
-			return { {"ok", true}, {"lobbies", active}, {"capacity", NUM_LOBBIES}, {"version", SF4E_VERSION} };
+			return { {"ok", true}, {"lobbies", active}, {"capacity", NUM_LOBBIES}, {"version", SF4E_VERSION},
+				{"players", CountPlayers()}, {"browsing", CountBrowsing(ntohl(from.sin_addr.s_addr), now)} };
 		}
 		if (op == "create") {
 			std::string hash = req.value("hash", "");
@@ -536,6 +557,7 @@ namespace {
 				l.server->SetSidecarHash(l.hash);
 				l.server->SetJoinSecret(l.secret);
 				l.server->ResetLobby();
+				l.server->SetPublic(isPublic);
 				SessionServer::LogStat("lobby_created", { {"lobby", l.index} });
 				spdlog::info("lobby {} created ({}): code {} session :{} relay :{} by {}",
 					l.index, isPublic ? "public" : "private", l.code, l.sessionPort, l.relay.port, req.value("name", "?"));
@@ -558,7 +580,8 @@ namespace {
 				});
 				if (list.size() >= 20) break;
 			}
-			return { {"ok", true}, {"list", list} };
+			return { {"ok", true}, {"list", list},
+				{"players", CountPlayers()}, {"browsing", CountBrowsing(ntohl(from.sin_addr.s_addr), now)} };
 		}
 		if (op == "join") {
 			std::string code = req.value("code", "");

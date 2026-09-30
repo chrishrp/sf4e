@@ -56,6 +56,13 @@ namespace {
 		bool gameplay = SessionProtocol::SnapshotGameplayDiffers(mine, theirs);
 		bool flow = SessionProtocol::SnapshotFlowDiffers(mine, theirs);
 		std::string diff = SessionProtocol::DescribeSnapshotDiff(mine, theirs);
+		// A time scale that is not exactly 1 means that PC is not on the Fixed
+		// frame-rate setting, which is the usual cause; say which side.
+		auto offClock = [](const SessionProtocol::StateSnapshot& s) {
+			return s.chara[0].timeScale.integral != 1 || s.chara[0].timeScale.fractional != 0;
+		};
+		if (offClock(mine)) diff += " [this PC is not on the Fixed frame-rate setting]";
+		if (offClock(theirs)) diff += " [the other PC is not on the Fixed frame-rate setting]";
 
 		// Rate-limited: the first several, then occasional, so a drifting
 		// value cannot flood the log across a long match.
@@ -652,6 +659,18 @@ EResult SessionClient::Lobby_Ready(int inputDelay)
 	EResult result = Send(j, &_outstandingReadyRequestNumber);
 	if (result != k_EResultOK) {
 		spdlog::warn("Client: could not send ready! Result: {}", (int)result);
+	}
+	return result;
+}
+
+EResult SessionClient::Lobby_Unready()
+{
+	LobbyReady msg;
+	msg.ready = false;
+	json j = msg;
+	EResult result = Send(j, nullptr);
+	if (result != k_EResultOK) {
+		spdlog::warn("Client: could not send not-ready! Result: {}", (int)result);
 	}
 	return result;
 }

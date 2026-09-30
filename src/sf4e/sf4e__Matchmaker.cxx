@@ -179,6 +179,8 @@ void Matchmaker::Poll() {
 			secret = reply.value("secret", "");
 			lobbiesInUse = reply.value("lobbies", lobbiesInUse);
 			capacity = reply.value("capacity", capacity);
+			playersOnline = reply.value("players", playersOnline);
+			browsing = reply.value("browsing", browsing);
 			serverVersion = reply.value("version", serverVersion);
 			if (reply.contains("list") && reply["list"].is_array()) {
 				publicLobbies.clear();

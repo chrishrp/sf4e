@@ -768,6 +768,19 @@ void fSystem::BattleUpdate() {
                                 f,
                                 probe.chara[0].action, probe.chara[0].actionFrame.integral, probe.chara[0].actionFrame.fractional, probe.chara[0].posture, probe.chara[0].timeScale.integral, probe.chara[0].timeScale.fractional,
                                 probe.chara[1].action, probe.chara[1].actionFrame.integral, probe.chara[1].actionFrame.fractional, probe.chara[1].posture, probe.chara[1].timeScale.integral, probe.chara[1].timeScale.fractional);
+                            if (f == 60) {
+                                // A time scale that is not exactly 1 means this PC is not on the
+                                // Fixed frame-rate setting and will drift from the other one.
+                                const bool offClock = probe.chara[0].timeScale.integral != 1 || probe.chara[0].timeScale.fractional != 0;
+                                if (offClock) {
+                                    bFrameRateSettingWrong = true;
+                                    spdlog::warn("Frame-rate setting: this PC's time scale is {}+{}/65536, not 1. Set frames per second to Fixed or the match will desync.",
+                                        probe.chara[0].timeScale.integral, probe.chara[0].timeScale.fractional);
+                                }
+                                else if (sf4e::Platform::D3D::LimiterActive()) {
+                                    bFrameRateSettingWrong = false;
+                                }
+                            }
                         }
                     }
 
@@ -1628,7 +1641,6 @@ void fSystem::StepPacing() {
         return;
     }
     ticksWithoutLimiter = 0;
-    bFrameRateSettingWrong = false;
     sf4e::Platform::D3D::RequestFrameShift(pacer.NextShiftMs());
     if (pacer.samples > 0 && pacer.samples % 600 == 0) {
         spdlog::info("Pacing: rift {:.2f} frames (peak {:.2f}), slowed {:.0f} ms, sped up {:.0f} ms, largest step {:.2f} ms, {} stalled ticks",

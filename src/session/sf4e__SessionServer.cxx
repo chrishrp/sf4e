@@ -244,6 +244,11 @@ void SessionServer::SetJoinSecret(const std::string& secret) {
 	_joinSecret = secret;
 }
 
+void SessionServer::SetPublic(bool isPublic) {
+	_lobbyData.isPublic = isPublic;
+	_dataDirty = true;
+}
+
 void SessionServer::RequireJoinSecret(bool required) {
 	_requireJoinSecret = required;
 }
@@ -601,6 +606,15 @@ int SessionServer::Step()
 				}
 				catch (json::exception e) {
 					spdlog::info("Server: could not deserialize ReportResultsRequest");
+					continue;
+				}
+				if (!request.ready) {
+					// Back to not ready, unless the match is already starting.
+					if (!_matchData.IsAllReady()) {
+						_matchData.readyMessageNum[side] = -1;
+						_matchData.inputDelay[side] = -1;
+						_dataDirty = true;
+					}
 					continue;
 				}
 				_matchData.readyMessageNum[side] = pIncomingMsg->GetMessageNumber();

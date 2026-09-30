@@ -124,6 +124,7 @@ namespace sf4e {
 			bool editionSelect;
 			int roundCount;
 			FixedPoint roundTime;
+			bool isPublic = false;
 			std::vector<MemberData> members;
 
 			static const LobbyData NULL_LOBBY;
@@ -258,6 +259,8 @@ namespace sf4e {
 			// higher of the two, so the fighter who chose less does not get
 			// responsive controls while the opponent absorbs the rollbacks.
 			int32_t inputDelay = -1;
+			// False takes the seat back to not ready; ignored once both are ready.
+			bool ready = true;
 		};
 
 		struct LobbyAllReady {
@@ -416,7 +419,7 @@ namespace sf4e {
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(LobbyID, host, key);
 
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(MemberData, connId, name, ip, port, spectator, watching, hostPort);
-		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(LobbyData, id, editionSelect, roundCount, roundTime, members);
+		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(LobbyData, id, editionSelect, roundCount, roundTime, members, isPublic);
 		// Explicit rather than the macro: MatchData holds C arrays, which the
 		// _WITH_DEFAULT form cannot assign, and inputDelay must default when a
 		// server that predates it leaves the key out.
@@ -448,7 +451,7 @@ namespace sf4e {
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(SessionJoinReject, type, result);
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(SessionJoinRequest, type, sidecarHash, username, port, spectator, secret);
 
-		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(LobbyReady, type, inputDelay);
+		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(LobbyReady, type, inputDelay, ready);
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(LobbyAllReady, type);
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(LobbyReportResults, type, loserSide);
 

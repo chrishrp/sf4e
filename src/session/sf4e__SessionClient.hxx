@@ -74,6 +74,7 @@ namespace sf4e {
 		bool _snapshotsEnabled;
 
 		EResult Lobby_Ready(int inputDelay);
+		EResult Lobby_Unready();
 		EResult Lobby_ReportResults(int loserSide);
 
 		EResult PreBattle_SetEnv(uint32_t rngSeed);

@@ -714,8 +714,8 @@ namespace {
 		ImU32 subCol = g_serverStatus == 1 ? GREEN : g_serverStatus == 0 ? RED : PAPER_DIM;
 		dl->AddText(g_fontBody, 26, ImVec2(64, 132), subCol, sub);
 		if (g_serverStatus == 1 && g_mm.capacity > 0) {
-			char cap[48];
-			snprintf(cap, sizeof(cap), "   %d of %d lobbies in use", g_mm.lobbiesInUse, g_mm.capacity);
+			char cap[96];
+			snprintf(cap, sizeof(cap), "   %d playing, %d looking   (%d of %d lobbies)", g_mm.playersOnline, g_mm.browsing, g_mm.lobbiesInUse, g_mm.capacity);
 			dl->AddText(g_fontSmall, 20, ImVec2(64 + TextSize(g_fontBody, 26, sub).x, 136), PAPER_DIM, cap);
 		}
 
@@ -820,6 +820,7 @@ namespace {
 				if (g_serverStatus == 0) { Flash("That server is unreachable. Try the other one."); break; }
 				g_isCreator = true;
 				g_spectate = false;
+				g_wins = g_losses = 0;
 				g_mm.Create(sf4e::sidecarHash, g_name, g_public);
 				g_screen = SC_CONNECTING;
 				break;
@@ -906,12 +907,16 @@ namespace {
 		if (in.alt || in.paste) PasteCode();
 		if (submit || watch) {
 			if (g_code.size() < 6) { Flash("The code has six characters"); }
-			else { g_spectate = watch; g_mm.Join(g_code, sf4e::sidecarHash, g_name, watch); g_screen = SC_CONNECTING; }
+			else { g_wins = g_losses = 0; g_spectate = watch; g_mm.Join(g_code, sf4e::sidecarHash, g_name, watch); g_screen = SC_CONNECTING; }
 		}
 	}
 
 	void DrawBrowse(ImDrawList* dl, ImVec2 ds, const Input& in) {
-		DrawHeader(dl, ds, "PUBLIC LOBBIES", "every region - joining one picks its server for you");
+		int online = 0, looking = 0;
+		for (auto& m : g_browseMm) { online += m->playersOnline; looking += m->browsing; }
+		char sub[96];
+		snprintf(sub, sizeof(sub), "every region   %d playing, %d looking right now", online, looking);
+		DrawHeader(dl, ds, "PUBLIC LOBBIES", sub);
 		{
 			char fresh[64];
 			if (g_listInFlight) snprintf(fresh, sizeof(fresh), "refreshing...");
@@ -1001,6 +1006,7 @@ namespace {
 			}
 			g_code = pick.code;
 			g_spectate = watch; g_isCreator = false; g_fromBrowse = true;
+			g_wins = g_losses = 0;
 			g_mm.Join(g_code, sf4e::sidecarHash, g_name, watch);
 			g_screen = SC_CONNECTING;
 		}
@@ -1074,7 +1080,7 @@ namespace {
 		TextCentered(dl, g_fontHead, 34, ds.x * 0.5f, ds.y * 0.24f + 130, line, PAPER_DIM, false);
 		if (!g_spectate) {
 			char tally[64];
-			snprintf(tally, sizeof(tally), "this session   %d - %d", g_wins, g_losses);
+			snprintf(tally, sizeof(tally), "this lobby   %d - %d", g_wins, g_losses);
 			TextCentered(dl, g_fontBody, 22, ds.x * 0.5f, ds.y * 0.24f + 176, tally, PAPER_DIM, false);
 		}
 
@@ -1215,7 +1221,7 @@ namespace {
 			g_stage = c._matchData.stageID;
 		}
 
-		DrawHeader(dl, ds, "LOBBY", nullptr);
+		DrawHeader(dl, ds, "LOBBY", c._lobbyData.isPublic ? "PUBLIC - anyone can find and join it from the list" : "PRIVATE - only someone with the code can join");
 		// The code, large and gold, where the creator's eye lands first.
 		TextOutlined(dl, g_fontTitle, 96, ImVec2(ds.x - 60 - TextSize(g_fontTitle, 96, code.c_str()).x, 30), code.c_str(), GOLD, 3.0f);
 		dl->AddText(g_fontSmall, 20, ImVec2(ds.x - 60 - 300, 130), PAPER_DIM, g_isCreator ? "give this code to your opponent   (Y / Ctrl+C: copy)" : "you joined this lobby");
@@ -1294,14 +1300,22 @@ namespace {
 			else dl->AddText(g_fontHead, 30, ImVec2(a.x + 30, a.y + 8), PAPER_DIM, acts[i]);
 			ax = b.x + 20;
 		}
-		const char* hint = g_lobbyRow == 1
+		const char* hint = g_sentReady
+			? "Waiting for the other player     B: not ready"
+			: g_lobbyRow == 1
 			? "Left/Right: next option     A / RB: change     LB: change back     Start: READY     B: leave"
 			: "Move: choose     A: select     Start: READY     B: leave";
 		DrawHint(dl, ds, connected ? hint : "Connecting to the lobby...");
 
 		// Input.
 		if (g_sentReady) {
-			if (in.back) { fUserApp::netplay.reset(); g_mm.Cancel(); g_screen = SC_HOME; }
+			// B takes the ready back, so a counterpick or a stage change does not
+			// cost the lobby. Leaving is the LEAVE LOBBY action.
+			if (in.back) {
+				c.Lobby_Unready();
+				g_sentReady = false;
+				Flash("Not ready. Change what you like, then READY again.", true);
+			}
 			return;
 		}
 		if (g_lobbyRow == 0) {

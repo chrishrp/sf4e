@@ -121,6 +121,7 @@ namespace sf4e {
 		std::vector<uint32_t> PlayerIPv4s() const;
 
 		void SetJoinSecret(const std::string& secret);
+		void SetPublic(bool isPublic);
 		void RequireJoinSecret(bool required);
 		// Close every connection; used when a lobby is released or reused.
 		void DisconnectAll();
