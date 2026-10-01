@@ -11,7 +11,7 @@ offsets. `src/sf4e` supplies the game hooks, GGPO integration, and native overla
 `SessionClient` sends selections/readiness to `SessionServer`; the standalone
 `LobbyServer` also supplies room-code matchmaking, relay traffic and spectators.
 
-The fork adds a game-independent `LobbyView` renderer and a WIC portrait loader,
+The fork adds a game-independent `LobbyView` renderer and a native portrait loader,
 then adapts the existing lobby state and controls to that renderer. Selection
 randomization runs only in the menu. The shared session protocol carries live
 selection ownership, room records, and match IDs; the server updates records
@@ -21,10 +21,16 @@ described in `MODDING-FEASIBILITY.md`.
 
 ## Using the room
 
-The room shows all 44 fighters with generated face art, large portraits of both
-players, their ready states, and each player's room wins and losses. The central
-score follows the current seating; names and records remain attached to the same
+The room shows official roster icons for all 44 fighters, large portraits of both
+players, their ready states, and each player's room wins and losses. Artwork is
+read from the installed game. The central score follows the current seating;
+names and records remain attached to the same
 members when the winner takes P1.
+
+Portraits load automatically from the game files. Players do not need to extract
+images, install Python, or copy artwork into the mod folder. The loader leaves
+game files unchanged and uses a silhouette when a portrait is unavailable.
+See [official portrait loading](PORTRAITS.md) for details.
 
 Use the d-pad/arrows to move, A/Enter to select, and LB/RB (Page Up/Page Down) to
 change an option. Start/F1 readies the player. Mouse clicks select fighters,
@@ -58,9 +64,11 @@ not award wins or losses. See `room-scores.md` for the result protocol and limit
 ## Build
 
 Use the upstream Windows x86 / MSVC / vcpkg build instructions. Build `Sidecar`,
-`Launcher`, and `LobbyServer`. The CMake build copies `assets/lobby` beside the
-DLL; installation and packaging include it. Portraits use Windows WIC and D3D9,
-so no new third-party image library is needed.
+`Launcher`, and `LobbyServer`. The portrait loader reads the installed game's
+portrait archives directly, using native code and D3D9. Its zlib dependency is
+supplied by the CMake/vcpkg build. No game files or extracted portrait assets are
+committed or included in packages. Windows WIC is used by the preview tool to
+write PNG screenshots.
 The package also includes `LobbyServer`, dependency DLLs, the x86 Visual C++
 release runtime, and a `server.txt` template with no active endpoint. Configure
 the server address before launching; no public server is supplied by this fork.
@@ -71,16 +79,14 @@ server (see `SERVER.md`). A new binary hash requires matching clients.
 
 ## Verification
 
-Validated on 1 October 2026 using MSVC 2019, Windows x86, RelWithDebInfo: the
-launcher, Sidecar DLL, lobby server, preview tool and three test executables all
-built successfully. CTest passed all three tests. Native D3D9 previews were
-inspected at 1600x1000, 1280x720 and 1024x768, including edition differences,
-spectator waiting states and missing portraits. All three random-button hit
-regions passed assertions. Catalog regeneration matched the installed game's
-English command resources.
+Validated on 1 October 2026 with MSVC 2019, Windows x86, RelWithDebInfo: client,
+server, preview and test targets built successfully; CTest passed 4/4 tests.
+The installed-asset check decoded all 44 official portraits and all 44 icons.
+Native D3D9 previews loaded all 88 images at 1600x1000 and 1280x720; missing-game
+resources displayed silhouettes and left the random-button hit regions usable.
 
 `ctest --test-dir <build> -C Release --output-on-failure` runs the catalog, room
-score policy and protocol roundtrip tests. Catalog regeneration can also be
+score policy, protocol roundtrip and portrait-parser checks. Catalog regeneration can be
 checked against an owned game installation using `tools/build_lobby_catalog.py`.
 
 `LobbyPreview` renders the **same** lobby renderer as the game, through Direct3D9
@@ -88,14 +94,20 @@ into an offscreen target. The window remains hidden; it exports a PNG and can
 assert real hit regions without attaching to the game:
 
 ```bat
-LobbyPreview lobby.png 1600 1000 --require-portraits
-LobbyPreview lobby-720.png 1280 720 --require-portraits
-LobbyPreview random.png --click 690 890 --expect-hit 2 2
+set "SF4E_PREVIEW_GAME_DIR=C:\Games\SteamLibrary\steamapps\common\Super Street Fighter IV - Arcade Edition"
+LobbyPreview lobby.png 1600 1000 --game-dir "%SF4E_PREVIEW_GAME_DIR%" --require-portraits
+LobbyPreview lobby-720.png 1280 720 --game-dir "%SF4E_PREVIEW_GAME_DIR%" --require-portraits
+LobbyPreview random.png --game-dir "%SF4E_PREVIEW_GAME_DIR%" --click 690 890 --expect-hit 2 2
 LobbyPreview missing.png --no-portraits
-LobbyPreview spectator.png --spectator
-LobbyPreview original-sf4.png --edition 13
-LobbyPreview omega-reference.png --edition 16
+LobbyPreview spectator.png --game-dir "%SF4E_PREVIEW_GAME_DIR%" --spectator
+LobbyPreview original-sf4.png --game-dir "%SF4E_PREVIEW_GAME_DIR%" --edition 13
+LobbyPreview omega-reference.png --game-dir "%SF4E_PREVIEW_GAME_DIR%" --edition 16
 ```
+
+Replace the example game directory with your Steam installation. `--game-dir`
+is needed for the standalone preview because it runs outside the game process;
+normal play discovers the game directory automatically. Preview rendering uses
+the same centered, proportionally scaled canvas as the game overlay.
 
 Preview names, readiness, scores and room codes are fixtures. They demonstrate
 layout and do not represent a real online session.

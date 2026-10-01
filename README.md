@@ -5,10 +5,11 @@ A process-inspection and modification tool for the Steam release of _Ultra Stree
 ## Arcade lobby fork
 
 This branch builds on [fabeloper/sf4e](https://github.com/fabeloper/sf4e) 1.0.2 with a
-portrait-based character select and room display. It includes all 44 AI-generated
-fighter portraits, named Ultra moves with directional inputs, a prominent shared
-stage, separate random fighter/Ultra/stage buttons, and room win/loss records that
-follow players through rematches and winner-stays seat changes.
+portrait-based character select and room display. It loads official roster icons
+and player portraits for all 44 fighters from your installed game. Named Ultra
+moves with directional inputs, a prominent shared stage, separate random
+fighter/Ultra/stage buttons, and room win/loss records complete the room display.
+Room records follow players through rematches and winner-stays seat changes.
 
 The lobby supports controllers, keyboard and mouse, and scales to the game window.
 Shared scores and live opponent selections require the **server from this fork**.
@@ -16,11 +17,14 @@ Older servers show score availability explicitly. Both players must run the same
 Sidecar build. The existing release installation is separate from this source tree.
 
 See [building and testing the lobby](docs/ARCADE-LOBBY.md),
+[official portrait loading](docs/PORTRAITS.md),
 [verified command data](docs/LOBBY_CATALOG.md),
 [room score behavior](docs/room-scores.md), and
 [new-character / ability modding feasibility](docs/MODDING-FEASIBILITY.md).
 
-Portrait provenance and the original generation prompt are in [assets/lobby](assets/lobby).
+Portraits load automatically without extracting files or installing Python.
+Game files and portrait archives are not included in this repository or its packages.
+The loader reads your local installation without changing its files.
 Game simulation and the upstream engine-offset mirror are unchanged by the lobby UI.
 
 ![Native lobby preview with demonstration players and scores](docs/images/arcade-lobby.png)

@@ -106,7 +106,7 @@ private:
 };
 
 struct Options {
-    std::wstring output;
+    std::wstring output, gameDirectory;
     int width = 1600, height = 1000;
     int p1 = 0, p2 = 2, ultra1 = 0, ultra2 = 1, stage = 2;
     int edition = 14;
@@ -135,11 +135,12 @@ void Usage() {
         "  --edition ID                13=SF4, 1=SSF4, 2=AE2011, 4=AE2012, 14=Ultra, 16=Omega\n"
         "  --waiting --spectator       Alternate lobby states\n"
         "  --no-portraits              Exercise missing-image fallbacks\n"
-        "  --require-portraits         Fail if the atlas cannot load\n"
+        "  --game-dir PATH             Installed USF4 folder containing SSFIV.exe\n"
+        "  --require-portraits         Fail unless all 44 official portraits and icons load\n"
         "  --focus-row N --focus-index N\n"
         "  --click X Y                 Logical 1600x1000 canvas coordinates, before letterboxing\n"
         "  --expect-hit ROW INDEX      Fail if the returned click target differs\n"
-        "The atlas must be assets/lobby/portraits.png beside this executable.");
+        "Official portraits are read directly from --game-dir; no extraction step is needed.");
 }
 
 Options Parse(int argc, wchar_t** argv) {
@@ -170,7 +171,8 @@ Options Parse(int argc, wchar_t** argv) {
             }
         } else {
             if (i >= argc) throw std::runtime_error("Missing option value");
-            if (arg == L"--p1") options.p1 = Integer(argv[i++], 0, 43);
+            if (arg == L"--game-dir") options.gameDirectory = argv[i++];
+            else if (arg == L"--p1") options.p1 = Integer(argv[i++], 0, 43);
             else if (arg == L"--p2") options.p2 = Integer(argv[i++], 0, 43);
             else if (arg == L"--ultra1") options.ultra1 = Integer(argv[i++], 0, 2);
             else if (arg == L"--ultra2") options.ultra2 = Integer(argv[i++], 0, 2);
@@ -324,8 +326,8 @@ int Render(const Options& options) {
     GuiSession gui;
     gui.Initialize(window.Get(), device.Get());
     sf4e::LobbyView::Fonts fonts = LoadFonts();
-    bool portraits = !options.noPortraits && sf4e::LobbyPortraits::Load(device.Get());
-    if (!portraits && options.requirePortraits) throw std::runtime_error("Portrait atlas could not load beside the preview executable");
+    bool portraits = !options.noPortraits && sf4e::LobbyPortraits::Load(device.Get(), options.gameDirectory.c_str());
+    if (!portraits && options.requirePortraits) throw std::runtime_error("Could not load all 44 official portraits and icons; check --game-dir");
     ImGui_ImplDX9_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGuiIO& io = ImGui::GetIO();
@@ -364,8 +366,9 @@ int Render(const Options& options) {
     ImGui_ImplDX9_RenderDrawData(data);
     Check(device->EndScene(), "Preview scene end");
     SavePng(device.Get(), target.Get(), options);
-    std::printf("Rendered %dx%d; portraits=%s; hit row=%d index=%d activate=%s\n",
-        options.width, options.height, portraits ? "loaded" : "fallback", hit.row, hit.index, hit.activate ? "true" : "false");
+    std::printf("Rendered %dx%d; official portraits=%d/44; icons=%d/44; hit row=%d index=%d activate=%s\n",
+        options.width, options.height, sf4e::LobbyPortraits::LoadedCount(), sf4e::LobbyPortraits::IconCount(),
+        hit.row, hit.index, hit.activate ? "true" : "false");
     if (options.expectHit && (hit.row != options.expectedRow || hit.index != options.expectedIndex || !hit.activate))
         throw std::runtime_error("Click target did not match --expect-hit");
     return 0;

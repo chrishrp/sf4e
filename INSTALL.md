@@ -27,6 +27,11 @@ It finds your Steam copy of the game by itself and starts it. Both players and
 spectators need matching fork binaries and the same server address. This
 development package does not include a hosted public server.
 
+The lobby reads official character portraits automatically from your installed
+game. No portrait extraction step or Python installation is needed, and the game
+files stay unchanged. A portrait that cannot load is replaced with a silhouette.
+See `docs/PORTRAITS.md` for details.
+
 If the blue **"Windows protected your PC"** box appears anyway, the app is not
 dangerous, it is only unsigned. Click **More info**, then **Run anyway**. Your
 antivirus may also warn, because the mod works by attaching to the game; that

@@ -26,8 +26,9 @@ void Frame(ImDrawList* dl,ImVec2 a,ImVec2 b,bool focused,ImU32 accent=gold) {
     dl->AddRect(a,b,focused?accent:edge,0,0,focused?3.f:1.f);
 }
 const char* Name(int id) {auto f=LobbyCatalog::Find(id);return f?f->name:"SELECTING...";}
-void Portrait(ImDrawList* dl,int id,ImVec2 a,ImVec2 b) {
-    if(!LobbyPortraits::Draw(dl,id,a,b)) {
+void Portrait(ImDrawList* dl,int id,ImVec2 a,ImVec2 b,bool rosterIcon=false) {
+    dl->AddRectFilled(a,b,IM_COL32(30,33,42,255));
+    if(!LobbyPortraits::Draw(dl,id,a,b,rosterIcon)) {
         dl->AddRectFilled(a,b,IM_COL32(30,33,42,255));
         ImVec2 c((a.x+b.x)/2,(a.y+b.y)/2);
         dl->AddCircleFilled(ImVec2(c.x,c.y-18),22,edge);
@@ -99,7 +100,7 @@ Hit Draw(ImDrawList* dl,const Fonts& f,const Model& m,ImVec2 mouse,bool click) {
     for(int i=0;i<LobbyCatalog::CharacterCount;++i){
         ImVec2 a(56+(i%11)*(cellW+6),400+(i/11)*(cellH+6)),b(a.x+cellW,a.y+cellH);
         bool selected=i==m.character,focused=m.focusRow==0&&m.characterCursor==i&&!m.spectator;
-        Portrait(dl,i,a,b);
+        Portrait(dl,i,a,b,true);
         dl->AddRectFilledMultiColor(ImVec2(a.x,b.y-27),b,IM_COL32(0,0,0,75),IM_COL32(0,0,0,75),IM_COL32(0,0,0,245),IM_COL32(0,0,0,245));
         Text(dl,f.caption,13,a.x+4,b.y-19,paper,Name(i),cellW-8);
         dl->AddRect(a,b,focused?paper:selected?gold:edge,0,0,focused?3.f:selected?3.f:1.f);

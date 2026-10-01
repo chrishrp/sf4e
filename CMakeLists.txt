@@ -31,6 +31,7 @@ if(WIN32)
     find_package(ggpo CONFIG REQUIRED)
     find_package(imgui CONFIG REQUIRED)
     find_package(protobuf CONFIG REQUIRED)
+    find_package(ZLIB REQUIRED)
 
     find_path(VALVEFILEVDF_INCLUDE_DIRS "vdf_parser.hpp")
 endif()
@@ -39,6 +40,9 @@ endif()
 # These exist to inject into and reverse the Windows game binary. The lobby
 # server below is deliberately independent of all of them.
 if(WIN32)
+
+add_library(PortraitArchive STATIC "src/sf4e/sf4e__PortraitArchive.cxx")
+target_link_libraries(PortraitArchive PUBLIC ZLIB::ZLIB)
 
 add_library(Dimps STATIC
     "src/Dimps/Dimps.hxx"
@@ -128,7 +132,7 @@ add_library(sf4e STATIC
 )
 target_link_libraries(
     sf4e
-    PRIVATE ${LIB_DETOURS} Session "Kernel32" "ws2_32" "Mswsock" "AdvApi32" "Shlwapi" "Bcrypt" "Xinput9_1_0" "Dbghelp" "Shell32" "d3d9" "windowscodecs" "ole32"
+    PRIVATE ${LIB_DETOURS} Session PortraitArchive "Kernel32" "ws2_32" "Mswsock" "AdvApi32" "Shlwapi" "Bcrypt" "Xinput9_1_0" "Dbghelp" "Shell32" "d3d9" "windowscodecs" "ole32"
     PUBLIC imgui::imgui nlohmann_json::nlohmann_json spdlog::spdlog GameNetworkingSockets::shared ggpo::GGPO
 )
 
@@ -172,6 +176,11 @@ if(BUILD_TESTING)
     add_executable(RoomProtocolTest tests/room_protocol_test.cxx)
     target_link_libraries(RoomProtocolTest PRIVATE Session)
     add_test(NAME RoomProtocol COMMAND RoomProtocolTest)
+    if(WIN32)
+        add_executable(PortraitArchiveTest tests/portrait_archive_test.cxx)
+        target_link_libraries(PortraitArchiveTest PRIVATE PortraitArchive)
+        add_test(NAME PortraitArchive COMMAND PortraitArchiveTest)
+    endif()
 endif()
 if(WIN32)
     target_link_libraries(Session PRIVATE Dimps)
@@ -211,15 +220,8 @@ target_link_libraries(Launcher PRIVATE ${LIB_DETOURS} CLI11::CLI11 spdlog::spdlo
 
 add_library(Sidecar SHARED src/sidecar/sidecar.cxx)
 
-# Keep portraits next to the DLL for local builds and installed packages.
-add_custom_command(TARGET Sidecar POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_directory
-    "${CMAKE_CURRENT_SOURCE_DIR}/assets/lobby" "$<TARGET_FILE_DIR:Sidecar>/assets/lobby")
-install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/assets/lobby" DESTINATION "assets")
-
 add_executable(LobbyPreview tools/lobby_preview.cxx src/sf4e/sf4e__LobbyView.cxx src/sf4e/sf4e__LobbyPortraits.cxx)
-target_link_libraries(LobbyPreview PRIVATE imgui::imgui spdlog::spdlog "d3d9" "windowscodecs" "ole32")
-add_custom_command(TARGET LobbyPreview POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_directory
-    "${CMAKE_CURRENT_SOURCE_DIR}/assets/lobby" "$<TARGET_FILE_DIR:LobbyPreview>/assets/lobby")
+target_link_libraries(LobbyPreview PRIVATE PortraitArchive imgui::imgui spdlog::spdlog "d3d9" "windowscodecs" "ole32")
 target_include_directories(Sidecar PRIVATE ${VALVEFILEVDF_INCLUDE_DIRS})
 target_link_libraries(Sidecar PRIVATE ${LIB_DETOURS} Dimps sf4e)
 
@@ -264,6 +266,7 @@ install(FILES
   "${CMAKE_CURRENT_SOURCE_DIR}/docs/room-scores.md"
   "${CMAKE_CURRENT_SOURCE_DIR}/docs/MODDING-FEASIBILITY.md"
   "${CMAKE_CURRENT_SOURCE_DIR}/docs/LOBBY_CATALOG.md"
+  "${CMAKE_CURRENT_SOURCE_DIR}/docs/PORTRAITS.md"
   DESTINATION "docs"
 )
 
