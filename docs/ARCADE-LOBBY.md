@@ -61,12 +61,23 @@ Use the upstream Windows x86 / MSVC / vcpkg build instructions. Build `Sidecar`,
 `Launcher`, and `LobbyServer`. The CMake build copies `assets/lobby` beside the
 DLL; installation and packaging include it. Portraits use Windows WIC and D3D9,
 so no new third-party image library is needed.
+The package also includes `LobbyServer`, dependency DLLs, the x86 Visual C++
+release runtime, and a `server.txt` template with no active endpoint. Configure
+the server address before launching; no public server is supplied by this fork.
 
 Do not replace a live installation while it is running. Use a separate package
 folder and set its `server.txt` or launcher's `--server` argument to your fork's
 server (see `SERVER.md`). A new binary hash requires matching clients.
 
 ## Verification
+
+Validated on 1 October 2026 using MSVC 2019, Windows x86, RelWithDebInfo: the
+launcher, Sidecar DLL, lobby server, preview tool and three test executables all
+built successfully. CTest passed all three tests. Native D3D9 previews were
+inspected at 1600x1000, 1280x720 and 1024x768, including edition differences,
+spectator waiting states and missing portraits. All three random-button hit
+regions passed assertions. Catalog regeneration matched the installed game's
+English command resources.
 
 `ctest --test-dir <build> -C Release --output-on-failure` runs the catalog, room
 score policy and protocol roundtrip tests. Catalog regeneration can also be

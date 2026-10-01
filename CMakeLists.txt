@@ -226,7 +226,7 @@ target_link_libraries(Sidecar PRIVATE ${LIB_DETOURS} Dimps sf4e)
 target_compile_definitions(Launcher PRIVATE -D_UNICODE -DUNICODE)
 
 install(
-  TARGETS Launcher Sidecar
+  TARGETS Launcher Sidecar LobbyServer
   RUNTIME DESTINATION "."
   LIBRARY DESTINATION "."
 )
@@ -253,9 +253,25 @@ install(
 install(
   FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/INSTALL.md"
+    "${CMAKE_CURRENT_SOURCE_DIR}/SERVER.md"
+    "${CMAKE_CURRENT_SOURCE_DIR}/server.txt"
     "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE"
   DESTINATION "."
 )
+
+install(FILES
+  "${CMAKE_CURRENT_SOURCE_DIR}/docs/ARCADE-LOBBY.md"
+  "${CMAKE_CURRENT_SOURCE_DIR}/docs/room-scores.md"
+  "${CMAKE_CURRENT_SOURCE_DIR}/docs/MODDING-FEASIBILITY.md"
+  "${CMAKE_CURRENT_SOURCE_DIR}/docs/LOBBY_CATALOG.md"
+  DESTINATION "docs"
+)
+
+# App-local release CRT for the supported Windows 10+ runtime.
+set(CMAKE_INSTALL_SYSTEM_RUNTIME_DESTINATION ".")
+set(CMAKE_INSTALL_DEBUG_LIBRARIES FALSE)
+set(CMAKE_INSTALL_UCRT_LIBRARIES FALSE)
+include(InstallRequiredSystemLibraries)
 
 # License texts of the bundled dependencies, as their licenses require.
 file(GLOB _copyrights "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/share/*/copyright")

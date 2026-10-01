@@ -5,9 +5,9 @@ connect out to it, so no player forwards a port. It hands out codes, runs the
 pre-match lobby, checks that both players run the same build, and relays the
 match traffic when the two players cannot reach each other directly.
 
-One small machine serves everyone in its region. The public SF4Enhanced
-servers run on this exact setup; you can run one for your own group, your
-country, or a tournament.
+Use this fork's server to enable the shared room records. No hosted server
+address is included in the development package. You can run a server for
+your own group on a machine reachable by all players and spectators.
 
 ## Before you start
 
@@ -39,7 +39,7 @@ its own `ping` and nothing from outside is almost always this.
 
 ```
 sudo apt-get install -y git
-git clone https://github.com/fabeloper/sf4e.git
+git clone --branch feature/arcade-lobby https://github.com/chrishrp/sf4e.git
 cd sf4e
 deploy/build-linux.sh
 deploy/install-service-linux.sh Europe
@@ -68,27 +68,44 @@ players to update too: a lobby only accepts the build it was created with.
 
 ## Install on Windows
 
-The Windows package exists for people who already have a Windows machine with
-a public address. It is the same server, run from a console window instead of
-a service.
+The combined arcade-lobby package includes `LobbyServer.exe` and its runtime
+DLLs. Run it from a console on a machine reachable by the players:
 
-1. Download `sf4e-server.zip` from the release and extract it anywhere.
-2. Right-click `run-server.cmd` and choose *Run as administrator*. It opens
-   Windows Firewall for the ports above and starts the server. Leave the
-   window open; if the server exits, the script restarts it.
-3. To keep it running after you disconnect from Remote Desktop, sign out
-   instead of closing the window, or register `run-server.cmd` as a scheduled
-   task that runs at startup under a limited user account.
+1. Extract the whole package; keep the DLLs beside the executable.
+2. Allow the UDP ranges above in Windows Firewall and any provider firewall.
+   A server behind a router also needs those ports forwarded to it for
+   internet play. For a local-network test, use the server machine's LAN IP.
+3. Open PowerShell in that folder and run `.\LobbyServer.exe`. Leave the
+   console open. Ctrl+C stops it; this direct command does not auto-restart it.
+4. Put that machine's reachable address in each client's `server.txt`.
 
-To update, extract the new zip over the folder and run `update-server.cmd`.
+For Remote Desktop, disconnect the session without signing out if you want
+the console process to keep running. For unattended operation, configure a
+service or a scheduled task under a limited user account. Signing out or
+closing the console terminates the console server.
+
+To update, stop the server, extract the new matching fork package, and start
+it again. The source repository also has deployment scripts under `deploy/`;
+the combined package uses the direct command above.
 
 ## Check that it answers
 
 From any other machine, with the server's public address in place of the
 example:
 
-```
-test-server.cmd 198.51.100.7
+In PowerShell:
+
+```powershell
+$probe = [Net.Sockets.UdpClient]::new()
+$probe.Client.ReceiveTimeout = 3000
+try {
+    $bytes = [Text.Encoding]::ASCII.GetBytes('{"op":"ping"}')
+    $probe.Send($bytes, $bytes.Length, '198.51.100.7', 23400) | Out-Null
+    $peer = [Net.IPEndPoint]::new([Net.IPAddress]::Any, 0)
+    [Text.Encoding]::ASCII.GetString($probe.Receive([ref]$peer))
+} finally {
+    $probe.Dispose()
+}
 ```
 
 or on Linux:

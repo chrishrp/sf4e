@@ -140,7 +140,7 @@ Hit Draw(ImDrawList* dl,const Fonts& f,const Model& m,ImVec2 mouse,bool click) {
     const char* opts[]={costume,color,m.ultra==0?"ULTRA I":m.ultra==1?"ULTRA II":"ULTRA DOUBLE",m.edition.c_str(),"STAGE  >"};
     if(!m.spectator||fighter)for(int i=0;i<5;++i){float x=56+i*207;ImVec2 a(x,790),b(x+195,836);bool focus=!m.spectator&&m.focusRow==1&&m.optionCursor==i;
         Frame(dl,a,b,focus,i==2?UltraColor(m.ultra):gold);Text(dl,f.body,19,x+12,803,focus?paper:muted,opts[i],171);target(a,b,1,i);}
-    if(m.spectator){Text(dl,f.head,30,56,869,paper,"WAITING FOR THE PLAYERS TO READY UP");Text(dl,f.caption,20,56,963,paper,"A / B  LEAVE ROOM     Y / Ctrl+C  COPY CODE");}
+    if(m.spectator){Text(dl,f.head,30,56,869,paper,m.spectatorStatus.c_str(),1488);Text(dl,f.caption,20,56,963,paper,"A / B  LEAVE ROOM     Y / Ctrl+C  COPY CODE");}
     else {
         const char* actions[]={m.ready?"READY / WAITING":"READY TO FIGHT","LEAVE ROOM","RANDOM FIGHTER","RANDOM ULTRA","RANDOM STAGE"};
         for(int i=0;i<5;++i){float x=56+i*301;ImVec2 a(x,872),b(x+284,924);bool focus=m.focusRow==2&&m.actionCursor==i;

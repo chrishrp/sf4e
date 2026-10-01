@@ -14,6 +14,7 @@ struct Player {
 struct Model {
     Player players[2];
     std::string code, watchers;
+    std::string spectatorStatus = "WAITING FOR THE PLAYERS TO READY UP";
     bool publicRoom = false, spectator = false, ready = false, scoresAvailable = false;
     int character = 0, ultra = 0, costume = 0, color = 0;
     std::string edition = "ULTRA";

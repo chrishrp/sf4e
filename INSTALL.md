@@ -18,10 +18,14 @@ rollback netcode while it runs, so you can remove it by deleting this folder.
    later. It is safe: it only clears the "downloaded from the internet" mark.
 2. Extract this whole folder anywhere you like. The Desktop is fine. Do **not**
    copy the files into the Street Fighter folder.
-3. Double-click `SF4Enhanced.exe`.
+3. Set `server.txt` to the address of a server running this fork's `LobbyServer`.
+   The included template has no active address. See `SERVER.md` to host the
+   server, and `docs/ARCADE-LOBBY.md` for this fork's features and test limits.
+4. Double-click `SF4Enhanced.exe`.
 
-That is all. It finds your Steam copy of the game by itself, starts it, and
-already knows where the lobby server is.
+It finds your Steam copy of the game by itself and starts it. Both players and
+spectators need matching fork binaries and the same server address. This
+development package does not include a hosted public server.
 
 If the blue **"Windows protected your PC"** box appears anyway, the app is not
 dangerous, it is only unsigned. Click **More info**, then **Run anyway**. Your
@@ -57,8 +61,9 @@ and gets a six-character code; the other types it in.
 5. When it ends, choose **Rematch**, **Change character**, or **Leave**.
 
 Controls in the lobby: d-pad or stick to move, **A** to confirm, **B** to go
-back, left and right to change an option, **Start** to ready up. On the
-keyboard: arrows, Enter, Escape, and you can type a code directly.
+back, **LB/RB** to change the selected option, **Start** to ready up. On the
+keyboard: arrows, Enter, Escape, Page Up/Page Down, and F1. You can type a code
+directly. While ready, B/Escape cancels readiness before editing.
 
 **Input delay** is on the home screen. Start at 2. Raise it if the match
 stutters.

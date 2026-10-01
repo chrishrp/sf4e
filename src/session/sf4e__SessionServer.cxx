@@ -653,6 +653,11 @@ int SessionServer::Step()
 				// An extra ready packet must not create another match or change
 				// the identity against which its eventual result is validated.
 				if (_matchData.IsAllReady() || _roomScores.ActiveMatchId() != 0) continue;
+				DropCharaFromVacatedSeats();
+				// Every ready must refer to a pick made by this occupant. Without
+				// this check, a bare ready or a newly filled seat can start a match
+				// that the final ownership cleanup immediately invalidates.
+				if (_matchData.charaMemberId[side] != clients[side].data.roomMemberId) continue;
 				_matchData.readyMessageNum[side] = pIncomingMsg->GetMessageNumber();
 				_matchData.inputDelay[side] = request.inputDelay;
 				if (_matchData.IsAllReady() && PlayerCount() == 2) {

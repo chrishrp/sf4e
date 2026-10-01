@@ -1240,6 +1240,14 @@ namespace {
             m.edition = EditionLabel(m.editionId);
             m.costume = c._matchData.chara[0].costume; m.color = c._matchData.chara[0].color;
         }
+        if (m.spectator) {
+            const auto* me = Me();
+            if (!m.players[0].present || !m.players[1].present)
+                m.spectatorStatus = "WAITING FOR TWO PLAYERS";
+            else if (c._matchData.IsAllReady())
+                m.spectatorStatus = me && me->watching ? "THE MATCH IS STARTING" :
+                    "MATCH IN PROGRESS / YOU WILL WATCH THE NEXT ONE";
+        }
         sf4e::LobbyView::Fonts fonts = {g_fontTitle, g_fontHead, g_fontBody, g_fontSmall};
         return sf4e::LobbyView::Draw(dl, fonts, m, g_canvasMouse,
             GameHasFocus() && ImGui::IsMouseClicked(ImGuiMouseButton_Left));
@@ -1521,6 +1529,7 @@ void sf4e::Lobby::Draw() {
 	if (sf4e::SessionClient::bConnectionLost) {
 		sf4e::SessionClient::bConnectionLost = false;
 		g_hasResult = false;
+        g_sentReady = false;
 		g_screen = SC_LOBBY;
 		g_lobbyRow = 2;
 		Flash("Lost connection to the server. Create or join a lobby again.");
