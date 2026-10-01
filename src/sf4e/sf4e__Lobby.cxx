@@ -26,6 +26,8 @@
 
 #include "sf4e.hxx"
 #include "sf4e__Lobby.hxx"
+#include "sf4e__LobbyView.hxx"
+#include "sf4e__LobbyCatalog.hxx"
 #include "sf4e__Game__Battle__System.hxx"
 #include "sf4e__Matchmaker.hxx"
 #include "sf4e__Pad.hxx"
@@ -77,7 +79,7 @@ namespace {
 	int g_resultChara[2] = { -1, -1 };
 	int g_mySideAtResult = -1;   // sides can rotate after reporting; keep ours
 	int g_resultCursor = 0;
-	int g_wins = 0, g_losses = 0;
+
 
 	bool g_open = false;
 	bool g_hiddenForBattle = false;
@@ -202,7 +204,7 @@ namespace {
 				ServerEntry e;
 				if (eq == std::string::npos) {
 					// A plain address, e.g. from server.txt: no name to show.
-					e.name = "SERVER";
+					e.name = "Server";
 					e.addr = item;
 				}
 				else {
@@ -257,7 +259,7 @@ namespace {
 
 	// Lobby screen: a character grid, then an options row, then actions.
 	const int CHARA_COUNT = 0x2c;
-	const int CHARA_COLS = 8;
+	const int CHARA_COLS = 11;
 	int g_charaCursor = 0;
 	int g_lobbyRow = 0;      // 0 = grid, 1 = options, 2 = actions
 	int g_optionCursor = 0;
@@ -270,6 +272,12 @@ namespace {
 	// and sent stage 0, dumping every rematch into the training stage.
 	bool g_stagePicked = false;
 	bool g_sentReady = false;
+	bool g_selectionPublished = false;
+	unsigned long long g_lastSelection = 0;
+	DWORD g_lastPublish = 0;
+	int g_lastPublishedStage = -1;
+	int g_lastPublishedSide = -1;
+	ImVec2 g_canvasMouse(-100, -100);
 	// Soak test: earliest tick at which the automatic ready-up may fire, used to
 	// let the server settle the previous match's result first.
 	DWORD g_soakReadyAfter = 0;
@@ -586,6 +594,9 @@ namespace {
 		fUserApp::StartSession(buf.data(), g_localGgpoPort, sf4e::sidecarHash, std::string(g_name), g_deviceType, g_deviceIdx, (uint8_t)g_delay, g_spectate);
 		if (fUserApp::netplay) fUserApp::netplay->client.joinSecret = g_mm.secret;
 		g_sentReady = false;
+		g_selectionPublished = false;
+		g_lastPublishedStage = -1;
+		g_stagePicked = false;
 		g_reportedLastMatch = false;
 		g_lobbyRow = 0;
 	}
@@ -596,12 +607,16 @@ namespace {
 		case rBattle::ED_SSF4: return "SSF4";
 		case rBattle::ED_AE2011: return "AE 2011";
 		case rBattle::ED_AE2012: return "AE 2012";
-		case rBattle::ED_USF4: return "ULTRA";
-		case rBattle::ED_OMEGA: return "OMEGA";
+		case rBattle::ED_USF4: return "Ultra";
+		case rBattle::ED_OMEGA: return "Omega";
 		default: return "?";
 		}
 	}
 
+    int UltraChoices() {
+        return g_cond.unc_edition == rBattle::ED_SF4 ? 1 :
+            g_cond.unc_edition == rBattle::ED_USF4 || g_cond.unc_edition == rBattle::ED_OMEGA ? 3 : 2;
+    }
 	void CycleEdition(int dir) {
 		int idx = -1, n = 0, list[NUM_VALID_EDITIONS];
 		for (int i = 0; i < NUM_VALID_EDITIONS; i++) {
@@ -612,14 +627,27 @@ namespace {
 			}
 		}
 		if (n == 0) return;
-		if (idx < 0) idx = n - 1;
+        if (idx < 0) {
+            // A newly selected fighter may not exist in the old edition.
+            // Prefer the standard Ultra ruleset for that fighter.
+            idx = 0;
+            for (int i = 0; i < n; ++i) if (list[i] == rBattle::ED_USF4) idx = i;
+        }
 		idx = (idx + dir + n) % n;
 		g_cond.unc_edition = (BYTE)list[idx];
+        g_cond.ultraCombo = (BYTE)(g_cond.ultraCombo % UltraChoices());
 	}
 
 	void SendReady() {
 		if (!fUserApp::netplay || g_sentReady) return;
 		sf4e::SessionClient& c = fUserApp::netplay->client;
+        if (MySide() < 0) { Flash("Still connecting to the room"); return; }
+        if (c._matchData.IsAllReady()) {
+            Flash("Result pending. Try Ready again shortly.");
+            return;
+        }
+        if (!g_stagePicked && sf4e::SessionProtocol::StageIDValid(c._matchData.stageID))
+            g_stage = (int)c._matchData.stageID;
 		if (sf4e::bSoakTest) {
 			// A fresh pairing and stage every match, so a long unattended run
 			// covers the roster and the stages rather than repeating one fight.
@@ -627,7 +655,8 @@ namespace {
 			g_cond.costume = 0;
 			g_cond.color = 0;
 			CycleEdition(0);
-			g_stage = (int)(sf4e::localRand() % 30);
+            g_stage = (int)(sf4e::localRand() % 30);
+            if (g_stage == 22 || g_stage == 23) g_stage = 0;
 			// Only side 0 actually sets the stage; side 1 must keep mirroring
 			// what it is told, or its own pick sticks in the UI and the two
 			// logs disagree about a stage they are in fact both playing.
@@ -637,19 +666,19 @@ namespace {
 		}
 		if (c.PreBattle_SetChara(g_cond) != k_EResultOK) { Flash("Could not send your character"); return; }
 		if (MySide() == 0) {
-			c.PreBattle_SetEnv(sf4e::localRand());
-			c.PreBattle_SetStage(g_stage);
+            if (c.PreBattle_SetEnv(sf4e::localRand()) != k_EResultOK ||
+                c.PreBattle_SetStage(g_stage) != k_EResultOK) {
+                Flash("Could not send the stage. Try Ready again."); return;
+            }
 		}
-		c.Lobby_Ready(g_delay);
+		if (c.Lobby_Ready(g_delay) != k_EResultOK) { Flash("Could not ready up"); return; }
 		g_sentReady = true;
 	}
 
 	// ---------------------------------------------------------------- screens
 	void DrawCapture(ImDrawList* dl, ImVec2 ds) {
-		DrawHeader(dl, ds, "ONLINE VERSUS", "sf4e rollback");
-		TextCentered(dl, g_fontHead, 44, ds.x * 0.5f, ds.y * 0.48f, "PRESS START", PAPER);
-		TextCentered(dl, g_fontBody, 24, ds.x * 0.5f, ds.y * 0.48f + 56, "on the controller you want to play with", PAPER_DIM, false);
-		DrawHint(dl, ds, "Keyboard: press Enter");
+		DrawHeader(dl, ds, "Online versus", nullptr);
+		TextCentered(dl, g_fontHead, 44, ds.x * 0.5f, ds.y * 0.48f, "Press Start or Enter", PAPER);
 
 		rPad* p = rPad::staticMethods.GetSingleton();
 		rPad::__publicMethods& m = rPad::publicMethods;
@@ -693,7 +722,7 @@ namespace {
 	void DrawSettingWarning(ImDrawList* dl, ImVec2 ds) {
 		if (!sf4e::Game::Battle::System::bFrameRateSettingWrong) return;
 		TextCentered(dl, g_fontBody, 24, ds.x * 0.5f, ds.y - 160,
-			"Set FRAMES PER SECOND to FIXED in the game's graphics options. Netplay runs smoother and stays in sync.", RED);
+			"Set 'Frames per second' to 'Fixed' in the game's graphics options.", RED);
 	}
 
 	void DrawHome(ImDrawList* dl, ImVec2 ds, const Input& in) {
@@ -708,9 +737,9 @@ namespace {
 			if (g_mm.state == sf4e::Matchmaker::State::Done) { g_serverStatus = 1; g_pingInFlight = false; g_mm.Cancel(); }
 			else if (g_mm.state == sf4e::Matchmaker::State::Failed) { g_serverStatus = 0; g_pingInFlight = false; g_mm.Cancel(); }
 		}
-		const char* sub = !g_mm.IsConfigured() ? "no server configured" :
-			g_serverStatus == 1 ? "SERVER ONLINE" : g_serverStatus == 0 ? "SERVER UNREACHABLE" : "checking the server...";
-		DrawHeader(dl, ds, "ONLINE VERSUS", nullptr);
+		const char* sub = !g_mm.IsConfigured() ? "No server configured" :
+			g_serverStatus == 1 ? "Server online" : g_serverStatus == 0 ? "Server unreachable" : "Checking the server...";
+		DrawHeader(dl, ds, "Online versus", nullptr);
 		ImU32 subCol = g_serverStatus == 1 ? GREEN : g_serverStatus == 0 ? RED : PAPER_DIM;
 		dl->AddText(g_fontBody, 26, ImVec2(64, 132), subCol, sub);
 		if (g_serverStatus == 1 && g_mm.capacity > 0) {
@@ -725,33 +754,33 @@ namespace {
 		bool updateAvailable = g_serverStatus == 1 && VersionNewer(g_mm.serverVersion, SF4E_VERSION);
 		if (updateAvailable) {
 			char msg[112];
-			snprintf(msg, sizeof(msg), "UPDATE AVAILABLE   v%s   (you have v%s)   -   press Y to download",
+			snprintf(msg, sizeof(msg), "Update available: v%s   (installed: v%s)   Y: Download",
 				g_mm.serverVersion.c_str(), SF4E_VERSION);
 			Slant(dl, ImVec2(40, 168), ImVec2(ds.x - 40, 210), GOLD, 8);
 			dl->AddText(g_fontBody, 24, ImVec2(66, 176), INK, msg);
 			if (in.alt) {
-				ShellExecuteA(NULL, "open", "https://github.com/fabeloper/sf4enhanced/releases/latest", NULL, NULL, SW_SHOWNORMAL);
-				Flash("Opening the download page in your browser", true);
+				ShellExecuteA(NULL, "open", "https://github.com/chrishrp/sf4e/releases", NULL, NULL, SW_SHOWNORMAL);
+				Flash("Opening downloads", true);
 			}
 		}
 
 		char delayLabel[32];
-		snprintf(delayLabel, sizeof(delayLabel), "INPUT DELAY   <  %d  >", g_delay);
+		snprintf(delayLabel, sizeof(delayLabel), "Input delay   <  %d  >", g_delay);
 		char serverLabel[64];
 		if (g_servers.size() > 1) {
-			snprintf(serverLabel, sizeof(serverLabel), "SERVER   <  %s  >", g_servers[g_serverIdx].name.c_str());
+			snprintf(serverLabel, sizeof(serverLabel), "Server   <  %s  >", g_servers[g_serverIdx].name.c_str());
 		}
 		else if (g_servers.size() == 1) {
-			snprintf(serverLabel, sizeof(serverLabel), "SERVER      %s", g_servers[0].name.c_str());
+			snprintf(serverLabel, sizeof(serverLabel), "Server      %s", g_servers[0].name.c_str());
 		}
 		else {
-			snprintf(serverLabel, sizeof(serverLabel), "SERVER      none");
+			snprintf(serverLabel, sizeof(serverLabel), "Server      none");
 		}
 		char connLabel[64];
-		snprintf(connLabel, sizeof(connLabel), "CONNECTION   <  %s  >", g_directOptIn ? "PEER TO PEER" : "SERVER RELAY");
+		snprintf(connLabel, sizeof(connLabel), "Connection   <  %s  >", g_directOptIn ? "Peer to peer" : "Server relay");
 		char createLabel[48];
-		snprintf(createLabel, sizeof(createLabel), "CREATE LOBBY   <  %s  >", g_public ? "PUBLIC" : "PRIVATE");
-		const char* items[HOME_ITEMS] = { createLabel, "BROWSE PUBLIC LOBBIES", "JOIN WITH CODE", serverLabel, delayLabel, connLabel, "BACK TO GAME" };
+		snprintf(createLabel, sizeof(createLabel), "Create lobby   <  %s  >", g_public ? "Public" : "Private");
+		const char* items[HOME_ITEMS] = { createLabel, "Browse public lobbies", "Join with code", serverLabel, delayLabel, connLabel, "Back to game" };
 		float y = ds.y * 0.36f;
 		for (int i = 0; i < HOME_ITEMS; i++) {
 			bool sel = i == g_homeCursor;
@@ -764,19 +793,11 @@ namespace {
 			}
 			y += 74;
 		}
-		// Both players must pick the same one, or their codes will not be found.
-		if (g_servers.size() > 1) {
-			dl->AddText(g_fontSmall, 20, ImVec2(80, y - 16), PAPER_DIM,
-				"Both players must choose the SAME server.");
-		}
-		dl->AddText(g_fontSmall, 20, ImVec2(80, y + 10), PAPER_DIM, ("Playing as " + std::string(g_name)).c_str());
-		DrawHint(dl, ds, "Up/Down: choose     A: confirm     Left/Right: change server | delay | connection     B: back to game");
 
 		if (in.up) g_homeCursor = (g_homeCursor + HOME_ITEMS - 1) % HOME_ITEMS;
 		if (in.down) g_homeCursor = (g_homeCursor + 1) % HOME_ITEMS;
 		if (g_homeCursor == 0 && (in.left || in.right)) {
 			g_public = !g_public;
-			Flash(g_public ? "Public: anyone can see and join this lobby from the list" : "Private: only someone with the code can join", true);
 			SaveSettings();
 		}
 		// Row 2 switches server, row 3 the input delay.
@@ -807,9 +828,6 @@ namespace {
 			if (!g_directOptIn && fUserApp::netplay) {
 				fUserApp::netplay->client.DisableDirect();
 			}
-			Flash(g_directOptIn
-				? "Peer to peer: lower ping. Your opponent sees your IP address and the game port is opened on your router"
-				: "Server relay: all traffic goes through the server; your IP address stays private", true);
 			SaveSettings();
 		}
 		if (in.back) { sf4e::Lobby::Close(); return; }
@@ -820,7 +838,7 @@ namespace {
 				if (g_serverStatus == 0) { Flash("That server is unreachable. Try the other one."); break; }
 				g_isCreator = true;
 				g_spectate = false;
-				g_wins = g_losses = 0;
+
 				g_mm.Create(sf4e::sidecarHash, g_name, g_public);
 				g_screen = SC_CONNECTING;
 				break;
@@ -843,7 +861,7 @@ namespace {
 	}
 
 	void DrawJoin(ImDrawList* dl, ImVec2 ds, const Input& in) {
-		DrawHeader(dl, ds, "JOIN", "type the code your opponent gave you");
+		DrawHeader(dl, ds, "Join with code", nullptr);
 		ReadTypedCode();
 
 		// The code so far, as six slots.
@@ -861,7 +879,7 @@ namespace {
 		float gridW = JOIN_COLS * cell + (JOIN_COLS - 1) * cg;
 		float gx0 = ds.x * 0.5f - gridW * 0.5f, gy0 = ds.y * 0.46f;
 		int charRows = (CODE_CHAR_COUNT + JOIN_COLS - 1) / JOIN_COLS;
-		const char* extras[JOIN_EXTRA] = { "DEL", "JOIN", "WATCH" };
+		const char* extras[JOIN_EXTRA] = { "Delete", "Join", "Watch" };
 		for (int i = 0; i < total_items; i++) {
 			bool sel = i == g_joinCursor;
 			ImVec2 a, b;
@@ -881,7 +899,6 @@ namespace {
 			dl->AddRectFilled(a, b, sel ? RED : CARD); dl->AddRect(a, b, sel ? PAPER : CARD_EDGE, 0, 0, 2);
 			TextCentered(dl, g_fontHead, 34, (a.x + b.x) * 0.5f, a.y + 10, label, PAPER, false);
 		}
-		DrawHint(dl, ds, "Move: pick a letter     A: add     B / Backspace: delete     Y / Ctrl+V: paste     Start: join     WATCH: spectate the match");
 
 		if (in.left) g_joinCursor = (g_joinCursor + total_items - 1) % total_items;
 		if (in.right) g_joinCursor = (g_joinCursor + 1) % total_items;
@@ -907,7 +924,7 @@ namespace {
 		if (in.alt || in.paste) PasteCode();
 		if (submit || watch) {
 			if (g_code.size() < 6) { Flash("The code has six characters"); }
-			else { g_wins = g_losses = 0; g_spectate = watch; g_mm.Join(g_code, sf4e::sidecarHash, g_name, watch); g_screen = SC_CONNECTING; }
+			else {  g_spectate = watch; g_mm.Join(g_code, sf4e::sidecarHash, g_name, watch); g_screen = SC_CONNECTING; }
 		}
 	}
 
@@ -915,13 +932,13 @@ namespace {
 		int online = 0, looking = 0;
 		for (auto& m : g_browseMm) { online += m->playersOnline; looking += m->browsing; }
 		char sub[96];
-		snprintf(sub, sizeof(sub), "every region   %d playing, %d looking right now", online, looking);
-		DrawHeader(dl, ds, "PUBLIC LOBBIES", sub);
+		snprintf(sub, sizeof(sub), "%d playing, %d looking", online, looking);
+		DrawHeader(dl, ds, "Public lobbies", sub);
 		{
 			char fresh[64];
-			if (g_listInFlight) snprintf(fresh, sizeof(fresh), "refreshing...");
+			if (g_listInFlight) snprintf(fresh, sizeof(fresh), "Refreshing...");
 			else if (g_lastListAt == 0) snprintf(fresh, sizeof(fresh), "");
-			else snprintf(fresh, sizeof(fresh), "live - refreshed %ds ago", (int)((GetTickCount64() - g_lastListAt) / 1000));
+			else snprintf(fresh, sizeof(fresh), "Refreshed %ds ago", (int)((GetTickCount64() - g_lastListAt) / 1000));
 			dl->AddText(g_fontSmall, 20, ImVec2(ds.x - 60 - TextSize(g_fontSmall, 20, fresh).x, 136), PAPER_DIM, fresh);
 		}
 		if (g_browseMm.size() != g_servers.size()) {
@@ -963,8 +980,6 @@ namespace {
 		if (g_browse.empty()) {
 			TextCentered(dl, g_fontHead, 34, ds.x * 0.5f, ds.y * 0.46f,
 				(g_lastListAt == 0 || g_listInFlight) ? "Looking for lobbies..." : "No public lobbies right now", PAPER_DIM);
-			TextCentered(dl, g_fontBody, 24, ds.x * 0.5f, ds.y * 0.46f + 50,
-				"Create one and it will appear here for everyone, in every region.", PAPER_DIM, false);
 		}
 		for (int i = 0; i < (int)g_browse.size(); i++) {
 			const auto& e = g_browse[i];
@@ -975,11 +990,10 @@ namespace {
 			TextOutlined(dl, g_fontHead, 36, ImVec2(80 + 38 + 18, y), e.title.c_str(), sel ? PAPER : PAPER_DIM);
 			char meta[112];
 			snprintf(meta, sizeof(meta), "%s     %s     %d / 2 players     %d watching     open %d min",
-				region.c_str(), e.full ? "IN MATCH" : "WAITING", e.players, e.spectators, e.age / 60);
+				region.c_str(), e.full ? "In match" : "Waiting", e.players, e.spectators, e.age / 60);
 			dl->AddText(g_fontSmall, 20, ImVec2(ds.x - 60 - TextSize(g_fontSmall, 20, meta).x, y + 12), sel ? PAPER : PAPER_DIM, meta);
 			y += 66;
 		}
-		DrawHint(dl, ds, "Up/Down: choose     A: join (open seat)     Y: watch     RB: refresh now     B: back");
 		if (in.rb && !g_listInFlight) g_lastListAt = 0;
 		int n = (int)g_browse.size();
 		if (n > 0) {
@@ -1006,14 +1020,14 @@ namespace {
 			}
 			g_code = pick.code;
 			g_spectate = watch; g_isCreator = false; g_fromBrowse = true;
-			g_wins = g_losses = 0;
+
 			g_mm.Join(g_code, sf4e::sidecarHash, g_name, watch);
 			g_screen = SC_CONNECTING;
 		}
 	}
 
 	void DrawConnecting(ImDrawList* dl, ImVec2 ds, const Input& in) {
-		DrawHeader(dl, ds, g_isCreator ? "CREATING LOBBY" : (g_spectate ? "JOINING AS SPECTATOR" : "JOINING"), nullptr);
+		DrawHeader(dl, ds, g_isCreator ? "Creating lobby" : (g_spectate ? "Joining as spectator" : "Joining"), nullptr);
 		g_mm.Poll();
 		if (g_mm.state == sf4e::Matchmaker::State::Waiting) {
 			int dots = (int)(GetTickCount64() / 400 % 4);
@@ -1022,9 +1036,9 @@ namespace {
 			if (in.back) { g_mm.Cancel(); g_screen = SC_HOME; }
 		}
 		else if (g_mm.state == sf4e::Matchmaker::State::Failed) {
-			TextCentered(dl, g_fontHead, 36, ds.x * 0.5f, ds.y * 0.44f, "COULD NOT CONNECT", RED);
+			TextCentered(dl, g_fontHead, 36, ds.x * 0.5f, ds.y * 0.44f, "Could not connect", RED);
 			TextCentered(dl, g_fontBody, 24, ds.x * 0.5f, ds.y * 0.44f + 54, g_mm.error.c_str(), PAPER_DIM, false);
-			DrawHint(dl, ds, "B: back");
+			DrawHint(dl, ds, "B: Back");
 			if (in.back || in.confirm) g_screen = g_isCreator ? SC_HOME : (g_fromBrowse ? SC_BROWSE : SC_JOIN);
 		}
 		else if (g_mm.state == sf4e::Matchmaker::State::Done) {
@@ -1058,34 +1072,38 @@ namespace {
 	void DrawResult(ImDrawList* dl, ImVec2 ds, const Input& in) {
 		bool draw = g_resultWinner < 0;
 		bool won = !draw && g_resultWinner == g_mySideAtResult;
-		DrawHeader(dl, ds, "MATCH OVER", nullptr);
+		DrawHeader(dl, ds, "Match over", nullptr);
 		DrawSettingWarning(dl, ds);
 		if (!g_spectate && fUserApp::netplay) KeepDirectAlive(fUserApp::netplay->client);
 
 		char who[64];
 		const char* verdict;
 		if (g_spectate) {
-			snprintf(who, sizeof(who), "%s WINS", g_resultWinner == 0 ? "P1" : "P2");
-			verdict = draw ? "DRAW" : who;
+			snprintf(who, sizeof(who), "%s wins", g_resultWinner == 0 ? "P1" : "P2");
+			verdict = draw ? "Draw" : who;
 		}
 		else {
-			verdict = draw ? "DRAW" : (won ? "YOU WIN" : "YOU LOSE");
+			verdict = draw ? "Draw" : (won ? "You win" : "You lose");
 		}
 		TextCentered(dl, g_fontTitle, 120, ds.x * 0.5f, ds.y * 0.24f, verdict, draw ? PAPER : ((won || g_spectate) ? GOLD : RED));
 
-		const char* c1 = (g_resultChara[0] >= 0 && g_resultChara[0] < CHARA_COUNT) ? Dimps::characterNames[g_resultChara[0]] : "?";
-		const char* c2 = (g_resultChara[1] >= 0 && g_resultChara[1] < CHARA_COUNT) ? Dimps::characterNames[g_resultChara[1]] : "?";
+		const char* c1 = (g_resultChara[0] >= 0 && g_resultChara[0] < CHARA_COUNT) ? sf4e::LobbyCatalog::Find(g_resultChara[0])->name : "?";
+		const char* c2 = (g_resultChara[1] >= 0 && g_resultChara[1] < CHARA_COUNT) ? sf4e::LobbyCatalog::Find(g_resultChara[1])->name : "?";
 		char line[96];
 		snprintf(line, sizeof(line), "%s   vs   %s", c1, c2);
 		TextCentered(dl, g_fontHead, 34, ds.x * 0.5f, ds.y * 0.24f + 130, line, PAPER_DIM, false);
-		if (!g_spectate) {
-			char tally[64];
-			snprintf(tally, sizeof(tally), "this lobby   %d - %d", g_wins, g_losses);
-			TextCentered(dl, g_fontBody, 22, ds.x * 0.5f, ds.y * 0.24f + 176, tally, PAPER_DIM, false);
-		}
+        if (fUserApp::netplay && fUserApp::netplay->client._lobbyData.roomScoresAvailable) {
+            const auto* me = Me();
+            char tally[128];
+            if (!g_spectate && me) {
+                snprintf(tally, sizeof(tally), "Room record   %llu W  /  %llu L",
+                    (unsigned long long)me->roomScore.wins, (unsigned long long)me->roomScore.losses);
+                TextCentered(dl, g_fontBody, 22, ds.x * .5f, ds.y * .24f + 176, tally, GOLD, false);
+            }
+        }
 
-		const char* playerItems[3] = { "REMATCH", "CHANGE CHARACTER", "LEAVE LOBBY" };
-		const char* watcherItems[2] = { "KEEP WATCHING", "LEAVE LOBBY" };
+		const char* playerItems[3] = { "Rematch", "Change character", "Leave lobby" };
+		const char* watcherItems[2] = { "Keep watching", "Leave lobby" };
 		int n = g_spectate ? 2 : 3;
 		const char** items = g_spectate ? watcherItems : playerItems;
 		float y = ds.y * 0.56f;
@@ -1097,7 +1115,6 @@ namespace {
 			TextOutlined(dl, g_fontHead, 40, ImVec2(x, y), items[i], sel ? PAPER : PAPER_DIM);
 			y += 72;
 		}
-		DrawHint(dl, ds, g_spectate ? "Up/Down: choose     A: confirm" : "Up/Down: choose     A: confirm     Start: rematch with the same character");
 
 		if (!fUserApp::netplay) {
 			TextCentered(dl, g_fontBody, 22, ds.x * 0.5f, ds.y * 0.50f, g_spectate ? "The lobby closed" : "Your opponent left", RED, false);
@@ -1111,7 +1128,7 @@ namespace {
 		}
 		bool rematch = in.start || (in.confirm && g_resultCursor == 0);
 		if (rematch) {
-			if (fUserApp::netplay) { SendReady(); g_screen = SC_LOBBY; g_lobbyRow = 2; g_actionCursor = 0; }
+            if (fUserApp::netplay) { SendReady(); if (g_sentReady) { g_screen = SC_LOBBY; g_lobbyRow = 2; g_actionCursor = 0; } }
 			else g_screen = SC_HOME;
 		}
 		else if (in.confirm && g_resultCursor == 1) {
@@ -1123,69 +1140,114 @@ namespace {
 		}
 	}
 
-	void DrawPlayerCard(ImDrawList* dl, ImVec2 a, ImVec2 b, const char* label, const char* name, int charaId, bool ready, bool me) {
-		dl->AddRectFilled(a, b, CARD); dl->AddRect(a, b, me ? GOLD : CARD_EDGE, 0, 0, me ? 3 : 2);
-		Slant(dl, ImVec2(a.x, a.y), ImVec2(a.x + 70, a.y + 34), me ? GOLD : RED, 8);
-		dl->AddText(g_fontHead, 26, ImVec2(a.x + 14, a.y + 3), INK, label);
-		dl->AddText(g_fontBody, 24, ImVec2(a.x + 90, a.y + 6), PAPER, name);
-		const char* cname = (charaId >= 0 && charaId < CHARA_COUNT && Dimps::characterNames[charaId]) ? Dimps::characterNames[charaId] : "-";
-		TextOutlined(dl, g_fontHead, 40, ImVec2(a.x + 14, a.y + 48), cname, PAPER);
-		if (ready) { Slant(dl, ImVec2(b.x - 130, b.y - 40), ImVec2(b.x - 8, b.y - 8), GREEN); dl->AddText(g_fontHead, 24, ImVec2(b.x - 112, b.y - 36), INK, "READY"); }
-	}
+	void PublishSelection() {
+        if (!fUserApp::netplay || g_sentReady || g_spectate) return;
+        auto& c = fUserApp::netplay->client;
+        if (c._matchData.IsAllReady()) return;
+        int side = MySide();
+        if (side < 0 || side > 1) return;
+        DWORD now = GetTickCount();
+        if (g_selectionPublished && now - g_lastPublish < 100) return;
+        unsigned long long signature = g_cond.charaID | ((unsigned long long)g_cond.costume << 8) |
+            ((unsigned long long)g_cond.color << 16) | ((unsigned long long)g_cond.ultraCombo << 24) |
+            ((unsigned long long)g_cond.unc_edition << 32);
+        if (!g_selectionPublished || signature != g_lastSelection || side != g_lastPublishedSide) {
+            if (c.PreBattle_SetChara(g_cond) == k_EResultOK) {
+                g_lastSelection = signature; g_selectionPublished = true;
+            }
+        }
+        if (side == 0 && (g_stage != g_lastPublishedStage || side != g_lastPublishedSide)) {
+            if (c.PreBattle_SetStage(g_stage) == k_EResultOK) g_lastPublishedStage = g_stage;
+        }
+        g_lastPublishedSide = side;
+        g_lastPublish = now;
+    }
 
-	// The spectator's room: the two players, who is watching, and when the
-	// next match starts. Nothing to pick; the players run the show.
-	void DrawSpectatorLobby(ImDrawList* dl, ImVec2 ds, const Input& in) {
-		sf4e::SessionClient& c = fUserApp::netplay->client;
-		bool connected = !c._lobbyData.members.empty();
-		std::string code = g_mm.code;
+    int CycleStage(int current, int delta) {
+        for (int i = 0; i < sf4e::LobbyCatalog::StageCount; ++i) {
+            current = (current + sf4e::LobbyCatalog::StageCount + delta) % sf4e::LobbyCatalog::StageCount;
+            if (sf4e::LobbyCatalog::FindStage(current)->versus) return current;
+        }
+        return 0;
+    }
 
-		DrawHeader(dl, ds, "SPECTATING", nullptr);
-		TextOutlined(dl, g_fontTitle, 96, ImVec2(ds.x - 60 - TextSize(g_fontTitle, 96, code.c_str()).x, 30), code.c_str(), GOLD, 3.0f);
-		dl->AddText(g_fontSmall, 20, ImVec2(ds.x - 60 - 300, 130), PAPER_DIM, "you are watching this lobby   (Y / Ctrl+C: copy)");
-		if ((in.alt || in.copy) && !code.empty()) {
-			ImGui::SetClipboardText(code.c_str());
-			Flash("Code copied to the clipboard", true);
-		}
+    int RandomStage() {
+        int pool[sf4e::LobbyCatalog::StageCount], count = 0;
+        for (int i = 0; i < sf4e::LobbyCatalog::StageCount; ++i)
+            if (sf4e::LobbyCatalog::FindStage(i)->versus) pool[count++] = i;
+        return count ? pool[sf4e::localRand() % count] : 0;
+    }
 
-		float cardW = (ds.x - 120 - 40) * 0.5f, cardH = 110, cy = 170;
-		for (int i = 0; i < 2; i++) {
-			const sf4e::SessionProtocol::MemberData* pm = PlayerAt(i);
-			bool ready = pm && c._matchData.readyMessageNum[i] > -1;
-			int charaId = ready ? c._matchData.chara[i].charaID : -1;
-			ImVec2 a(60 + i * (cardW + 40), cy);
-			DrawPlayerCard(dl, a, ImVec2(a.x + cardW, cy + cardH), i == 0 ? "P1" : "P2", pm ? pm->name.c_str() : "waiting for a player...", charaId, ready, false);
-		}
-		TextCentered(dl, g_fontTitle, 48, ds.x * 0.5f, cy + 24, "VS", RED);
+    void Randomize(int action) {
+        if (action == 2) {
+            g_charaCursor = (int)(sf4e::localRand() % CHARA_COUNT);
+            g_cond.charaID = (BYTE)g_charaCursor;
+            g_cond.costume = g_cond.color = 0;
+            CycleEdition(0);
+        } else if (action == 3) {
+            g_cond.ultraCombo = (BYTE)(sf4e::localRand() % UltraChoices());
+        } else if (action == 4) {
+            g_stage = RandomStage(); g_stagePicked = true;
+        }
+    }
 
-		const sf4e::SessionProtocol::MemberData* me = Me();
-		bool bothReady = c._matchData.readyMessageNum[0] > -1 && c._matchData.readyMessageNum[1] > -1;
-		const char* status;
-		if (!connected) status = "Connecting to the lobby...";
-		else if (!PlayerAt(0) || !PlayerAt(1)) status = "Waiting for two players";
-		else if (bothReady && me && me->watching) status = "The match is starting";
-		else if (bothReady) status = "A match is in progress. You will watch the next one.";
-		else status = "Waiting for the players to ready up";
-		TextCentered(dl, g_fontHead, 36, ds.x * 0.5f, cy + cardH + 70, status, PAPER);
-		std::string specs = SpectatorNames();
-		TextCentered(dl, g_fontBody, 22, ds.x * 0.5f, cy + cardH + 130, ("Watching: " + specs).c_str(), PAPER_DIM, false);
-		TextCentered(dl, g_fontSmall, 20, ds.x * 0.5f, cy + cardH + 170, "You see the match from P1's side, a moment behind the players.", PAPER_DIM, false);
+    sf4e::LobbyView::Hit DrawRoom(ImDrawList* dl) {
+        auto& c = fUserApp::netplay->client;
+        sf4e::LobbyView::Model m;
+        m.code = g_mm.code; m.watchers = SpectatorNames();
+        m.publicRoom = c._lobbyData.isPublic; m.spectator = g_spectate;
+        m.ready = g_sentReady; m.scoresAvailable = c._lobbyData.roomScoresAvailable;
+        m.character = g_cond.charaID; m.ultra = g_cond.ultraCombo;
+        m.costume = g_cond.costume; m.color = g_cond.color; m.edition = EditionLabel(g_cond.unc_edition);
+        m.editionId = g_cond.unc_edition;
+        m.side = MySide(); m.stage = m.side == 0 ? g_stage : (int)c._matchData.stageID;
+        m.proposedStage = g_stage;
+        m.focusRow = g_lobbyRow; m.characterCursor = g_charaCursor;
+        m.optionCursor = g_optionCursor; m.actionCursor = g_actionCursor;
+        if (m.spectator) { m.character = -1; m.ultra = 0; m.edition = "Ultra"; m.editionId = rBattle::ED_USF4; }
+        for (int i = 0; i < 2; ++i) {
+            auto pm = PlayerAt(i); auto& p = m.players[i];
+            if (!pm) continue;
+            p.name = pm->name; p.present = true; p.local = i == m.side;
+            p.ready = c._matchData.readyMessageNum[i] > -1;
+            bool pick = (pm->roomMemberId != 0 && c._matchData.charaMemberId[i] == pm->roomMemberId) ||
+                (!c._lobbyData.roomScoresAvailable && p.ready);
+            p.character = p.local ? g_cond.charaID : pick ? c._matchData.chara[i].charaID : -1;
+            p.ultra = p.local ? g_cond.ultraCombo : pick ? c._matchData.chara[i].ultraCombo : 0;
+            p.wins = pm->roomScore.wins; p.losses = pm->roomScore.losses;
+        }
+        if (m.spectator && m.players[0].character >= 0) {
+            m.character = m.players[0].character; m.ultra = m.players[0].ultra;
+            m.editionId = c._matchData.chara[0].unc_edition;
+            m.edition = EditionLabel(m.editionId);
+            m.costume = c._matchData.chara[0].costume; m.color = c._matchData.chara[0].color;
+        }
+        if (m.spectator) {
+            const auto* me = Me();
+            if (!m.players[0].present || !m.players[1].present)
+                m.spectatorStatus = "Waiting for players";
+            else if (c._matchData.IsAllReady())
+                m.spectatorStatus = me && me->watching ? "Match starting" :
+                    "Watching next match";
+        }
+        sf4e::LobbyView::Fonts fonts = {g_fontTitle, g_fontHead, g_fontBody, g_fontSmall};
+        return sf4e::LobbyView::Draw(dl, fonts, m, g_canvasMouse,
+            GameHasFocus() && ImGui::IsMouseClicked(ImGuiMouseButton_Left));
+    }
 
-		float ay = ds.y * 0.72f;
-		const char* act = "LEAVE LOBBY";
-		ImVec2 sz = TextSize(g_fontHead, 30, act);
-		ImVec2 a(60, ay), b(60 + sz.x + 60, ay + 50);
-		Slant(dl, a, b, RED, 10);
-		TextOutlined(dl, g_fontHead, 30, ImVec2(a.x + 30, a.y + 8), act, PAPER);
-		DrawHint(dl, ds, "A / B: leave the lobby     Y / Ctrl+C: copy the code");
-		if (in.back || in.confirm) LeaveLobby();
-	}
+    void DrawSpectatorLobby(ImDrawList* dl, ImVec2 ds, const Input& in) {
+        DrawRoom(dl);
+        if ((in.alt || in.copy) && !g_mm.code.empty()) {
+            ImGui::SetClipboardText(g_mm.code.c_str()); Flash("Code copied", true);
+        }
+        if (in.back || in.confirm) LeaveLobby();
+    }
 
 	void DrawLobby(ImDrawList* dl, ImVec2 ds, const Input& in) {
 		if (!fUserApp::netplay) {
-			DrawHeader(dl, ds, "LOBBY", nullptr);
+			DrawHeader(dl, ds, "Lobby", nullptr);
 			TextCentered(dl, g_fontHead, 34, ds.x * 0.5f, ds.y * 0.48f, "Connection lost", RED);
-			DrawHint(dl, ds, "B: back");
+			DrawHint(dl, ds, "B: Back");
 			if (in.back || in.confirm) g_screen = SC_HOME;
 			return;
 		}
@@ -1221,100 +1283,28 @@ namespace {
 			g_stage = c._matchData.stageID;
 		}
 
-		DrawHeader(dl, ds, "LOBBY", c._lobbyData.isPublic ? "PUBLIC - anyone can find and join it from the list" : "PRIVATE - only someone with the code can join");
-		// The code, large and gold, where the creator's eye lands first.
-		TextOutlined(dl, g_fontTitle, 96, ImVec2(ds.x - 60 - TextSize(g_fontTitle, 96, code.c_str()).x, 30), code.c_str(), GOLD, 3.0f);
-		dl->AddText(g_fontSmall, 20, ImVec2(ds.x - 60 - 300, 130), PAPER_DIM, g_isCreator ? "give this code to your opponent   (Y / Ctrl+C: copy)" : "you joined this lobby");
-		if ((in.alt || in.copy) && !code.empty()) {
-			ImGui::SetClipboardText(code.c_str());
-			Flash("Code copied to the clipboard", true);
-		}
-
-		// Player cards.
-		float cardW = (ds.x - 120 - 40) * 0.5f, cardH = 110, cy = 170;
-		for (int i = 0; i < 2; i++) {
-			const sf4e::SessionProtocol::MemberData* pm = PlayerAt(i);
-			bool has = pm != nullptr;
-			const char* name = has ? pm->name.c_str() : "waiting for opponent...";
-			bool ready = has && c._matchData.readyMessageNum[i] > -1;
-			int charaId = -1;
-			if (has && i == side) charaId = g_cond.charaID;
-			else if (has && ready) charaId = c._matchData.chara[i].charaID;
-			ImVec2 a(60 + i * (cardW + 40), cy);
-			DrawPlayerCard(dl, a, ImVec2(a.x + cardW, cy + cardH), i == 0 ? "P1" : "P2", name, charaId, ready, has && i == side);
-		}
-		TextCentered(dl, g_fontTitle, 48, ds.x * 0.5f, cy + 24, "VS", RED);
-		std::string specs = SpectatorNames();
-		if (!specs.empty()) dl->AddText(g_fontSmall, 20, ImVec2(60, cy + cardH + 4), PAPER_DIM, ("Watching: " + specs).c_str());
-
-		// Character grid.
-		float gy = cy + cardH + 26;
-		float cellW = (ds.x - 120 - (CHARA_COLS - 1) * 6) / CHARA_COLS, cellH = 40;
-		for (int i = 0; i < CHARA_COUNT; i++) {
-			int r = i / CHARA_COLS, col = i % CHARA_COLS;
-			ImVec2 a(60 + col * (cellW + 6), gy + r * (cellH + 6)), b(a.x + cellW, a.y + cellH);
-			bool cursor = g_lobbyRow == 0 && i == g_charaCursor;
-			bool chosen = i == g_cond.charaID;
-			dl->AddRectFilled(a, b, cursor ? RED : (chosen ? IM_COL32(242, 193, 78, 60) : CARD));
-			dl->AddRect(a, b, cursor ? PAPER : (chosen ? GOLD : CARD_EDGE), 0, 0, chosen || cursor ? 2 : 1);
-			const char* nm = Dimps::characterNames[i] ? Dimps::characterNames[i] : "?";
-			dl->AddText(g_fontBody, 20, ImVec2(a.x + 8, a.y + 8), cursor ? PAPER : (chosen ? GOLD : PAPER_DIM), nm);
-		}
-		int rows = (CHARA_COUNT + CHARA_COLS - 1) / CHARA_COLS;
-		float oy = gy + rows * (cellH + 6) + 18;
-
-		// Options row.
-		char costume[24], color[24], ultra[24], edition[24], stage[40];
-		snprintf(costume, sizeof(costume), "COSTUME %d", g_cond.costume + 1);
-		snprintf(color, sizeof(color), "COLOR %d", g_cond.color + 1);
-		snprintf(ultra, sizeof(ultra), "ULTRA %s", g_cond.ultraCombo == 0 ? "I" : g_cond.ultraCombo == 1 ? "II" : "W");
-		snprintf(edition, sizeof(edition), "%s", EditionLabel(g_cond.unc_edition));
-		snprintf(stage, sizeof(stage), "STAGE: %s%s", Dimps::stageNames[g_stage] ? Dimps::stageNames[g_stage] : "?",
-			side == 0 ? "" : "  (applies when you are P1)");
-		const char* opts[5] = { costume, color, ultra, edition, stage };
-		int nOpts = 5;
-		float ox = 60;
-		for (int i = 0; i < nOpts; i++) {
-			bool cursor = g_lobbyRow == 1 && i == g_optionCursor;
-			// The focused option wears chevrons so it reads as "press to change".
-			char shown[64];
-			snprintf(shown, sizeof(shown), cursor ? "<  %s  >" : "%s", opts[i]);
-			ImVec2 sz = TextSize(g_fontBody, 22, shown);
-			ImVec2 a(ox, oy), b(ox + sz.x + 36, oy + 40);
-			if (cursor) Slant(dl, a, b, RED, 8); else dl->AddRect(a, b, CARD_EDGE, 0, 0, 1);
-			dl->AddText(g_fontBody, 22, ImVec2(a.x + 18, a.y + 8), cursor ? PAPER : PAPER_DIM, shown);
-			ox = b.x + 14;
-		}
-
-		// Actions.
-		float ay = oy + 60;
-		const char* acts[2] = { g_sentReady ? "READY  -  waiting" : "READY", "LEAVE LOBBY" };
-		float ax = 60;
-		for (int i = 0; i < 2; i++) {
-			bool cursor = g_lobbyRow == 2 && i == g_actionCursor;
-			ImVec2 sz = TextSize(g_fontHead, 30, acts[i]);
-			ImVec2 a(ax, ay), b(ax + sz.x + 60, ay + 50);
-			Slant(dl, a, b, cursor ? (i == 0 ? GREEN : RED) : CARD, 10);
-			if (!cursor) dl->AddRect(a, b, CARD_EDGE, 0, 0, 1);
-			if (cursor) TextOutlined(dl, g_fontHead, 30, ImVec2(a.x + 30, a.y + 8), acts[i], PAPER);
-			else dl->AddText(g_fontHead, 30, ImVec2(a.x + 30, a.y + 8), PAPER_DIM, acts[i]);
-			ax = b.x + 20;
-		}
-		const char* hint = g_sentReady
-			? "Waiting for the other player     B: not ready"
-			: g_lobbyRow == 1
-			? "Left/Right: next option     A / RB: change     LB: change back     Start: READY     B: leave"
-			: "Move: choose     A: select     Start: READY     B: leave";
-		DrawHint(dl, ds, connected ? hint : "Connecting to the lobby...");
+        auto hit = DrawRoom(dl);
+        bool mouseConfirm = hit.activate && connected && !g_sentReady;
+        if (mouseConfirm) {
+            g_lobbyRow = hit.row;
+            if (hit.row == 0) g_charaCursor = hit.index;
+            if (hit.row == 1) g_optionCursor = hit.index;
+            if (hit.row == 2) g_actionCursor = hit.index;
+        }
+        bool confirm = in.confirm || mouseConfirm;
+        const int nOpts = 5;
+        if ((in.alt || in.copy) && !code.empty()) {
+            ImGui::SetClipboardText(code.c_str()); Flash("Code copied", true);
+        }
 
 		// Input.
 		if (g_sentReady) {
 			// B takes the ready back, so a counterpick or a stage change does not
 			// cost the lobby. Leaving is the LEAVE LOBBY action.
 			if (in.back) {
-				c.Lobby_Unready();
+                if (c.Lobby_Unready() != k_EResultOK) { Flash("Could not cancel ready"); return; }
 				g_sentReady = false;
-				Flash("Not ready. Change what you like, then READY again.", true);
+				Flash("Ready cancelled", true);
 			}
 			return;
 		}
@@ -1323,7 +1313,7 @@ namespace {
 			if (in.right) g_charaCursor = (g_charaCursor + 1) % CHARA_COUNT;
 			if (in.up) { if (g_charaCursor >= CHARA_COLS) g_charaCursor -= CHARA_COLS; }
 			if (in.down) { if (g_charaCursor + CHARA_COLS < CHARA_COUNT) g_charaCursor += CHARA_COLS; else g_lobbyRow = 1; }
-			if (in.confirm) { g_cond.charaID = (BYTE)g_charaCursor; g_cond.costume = 0; g_cond.color = 0; CycleEdition(0); }
+			if (confirm) { g_cond.charaID = (BYTE)g_charaCursor; g_cond.costume = 0; g_cond.color = 0; CycleEdition(0); }
 		}
 		else if (g_lobbyRow == 1) {
 			if (in.up) g_lobbyRow = 0;
@@ -1331,32 +1321,35 @@ namespace {
 			// Left/right walk along the row; A and the bumpers change the value.
 			if (in.left) g_optionCursor = (g_optionCursor + nOpts - 1) % nOpts;
 			if (in.right) g_optionCursor = (g_optionCursor + 1) % nOpts;
-			int d = in.confirm ? 1 : 0;
+			int d = confirm ? 1 : 0;
 			if (in.rb) d = 1; if (in.lb) d = -1;
 			if (d != 0) {
 				switch (g_optionCursor) {
 				case 0: g_cond.costume = (BYTE)((g_cond.costume + 8 + d) % 8); break;
 				case 1: g_cond.color = (BYTE)((g_cond.color + 10 + d) % 10); break;
-				case 2: g_cond.ultraCombo = (BYTE)((g_cond.ultraCombo + 3 + d) % 3); break;
+				case 2: g_cond.ultraCombo = (BYTE)((g_cond.ultraCombo + UltraChoices() + d) % UltraChoices()); break;
 				case 3: CycleEdition(d); break;
 				// Either player may choose. Only seat 0's choice is sent, but P2
 				// keeps theirs and it takes effect the moment they win and are
 				// promoted -- instead of silently reverting to stage 0.
-				case 4: g_stage = (g_stage + 30 + d) % 30; g_stagePicked = true; break;
+				case 4: g_stage = CycleStage(g_stage, d); g_stagePicked = true; break;
 				}
 			}
 		}
 		else {
 			if (in.up) g_lobbyRow = 1;
-			if (in.left || in.right) g_actionCursor = 1 - g_actionCursor;
-			if (in.confirm) {
+			if (in.left) g_actionCursor = (g_actionCursor + 4) % 5;
+            if (in.right) g_actionCursor = (g_actionCursor + 1) % 5;
+			if (confirm) {
 				if (g_actionCursor == 0) SendReady();
-				else { fUserApp::netplay.reset(); g_mm.Cancel(); g_screen = SC_HOME; return; }
+				else if (g_actionCursor == 1) { LeaveLobby(); return; }
+                else Randomize(g_actionCursor);
 			}
 		}
 		if (in.start && connected) SendReady();
 		if (in.back && g_lobbyRow != 2) { g_lobbyRow = 2; g_actionCursor = 1; }
 		else if (in.back) { fUserApp::netplay.reset(); g_mm.Cancel(); g_screen = SC_HOME; }
+        PublishSelection();
 	}
 }
 
@@ -1391,7 +1384,7 @@ void sf4e::Lobby::Open() {
 	g_pingInFlight = false;
 	g_homeCursor = 0;
 	g_error.clear();
-	GenerateStrokes(ImGui::GetIO().DisplaySize);
+	GenerateStrokes(ImVec2(1600, 1000));
 	SetSuppress(true);
 	g_prevPad = 0xffff;
 	spdlog::info("Lobby: opened");
@@ -1445,12 +1438,12 @@ void sf4e::Lobby::OnMatchResult(int winnerSide, int charaP1, int charaP2) {
 	g_resultChara[1] = charaP2;
 	// The match data knows what each side actually picked.
 	sf4e::SessionClient& c = fUserApp::netplay->client;
-	if (c._matchData.readyMessageNum[0] > -1) g_resultChara[0] = c._matchData.chara[0].charaID;
-	if (c._matchData.readyMessageNum[1] > -1) g_resultChara[1] = c._matchData.chara[1].charaID;
-	g_mySideAtResult = MySide();
-	if (winnerSide >= 0 && !g_spectate) {
-		if (winnerSide == g_mySideAtResult) g_wins++; else g_losses++;
-	}
+    for (int i = 0; i < 2; ++i) {
+        int character = c.ActiveMatchCharacter(i);
+        if (character >= 0 && character < CHARA_COUNT) g_resultChara[i] = character;
+    }
+	g_mySideAtResult = c.ActiveMatchSide();
+
 	spdlog::info("Lobby: match over, winner side {} (me: side {})", winnerSide, g_mySideAtResult);
 }
 
@@ -1486,10 +1479,11 @@ void sf4e::Lobby::Draw() {
 
 		// Ask the server to reset readiness so both players can go again.
 		// Only one side may report, or the winner-stays rotation runs twice
-		// and undoes itself; P1 does it. A draw is reported as P2 losing,
-		// which leaves the sides where they were.
-		if (fUserApp::netplay && MySide() == 0) {
-			int loser = (g_hasResult && g_resultWinner >= 0) ? (1 - g_resultWinner) : 1;
+		// and undoes itself; P1 does it. Draws and aborts explicitly report
+        // no loser so neither player gains a win or a loss.
+		if (fUserApp::netplay && !g_spectate && fUserApp::netplay->client.ActiveMatchSide() == 0) {
+			int loser = (g_hasResult && g_resultWinner >= 0 && g_resultWinner < 2 &&
+                !sf4e::SessionClient::bDesyncAbort) ? (1 - g_resultWinner) : -1;
 			fUserApp::netplay->client.Lobby_ReportResults(loser);
 		}
 		if (g_hasResult) {
@@ -1517,6 +1511,7 @@ void sf4e::Lobby::Draw() {
 	if (sf4e::SessionClient::bConnectionLost) {
 		sf4e::SessionClient::bConnectionLost = false;
 		g_hasResult = false;
+        g_sentReady = false;
 		g_screen = SC_LOBBY;
 		g_lobbyRow = 2;
 		Flash("Lost connection to the server. Create or join a lobby again.");
@@ -1544,14 +1539,22 @@ void sf4e::Lobby::Draw() {
 	}
 
 	ImGuiIO& io = ImGui::GetIO();
-	ImVec2 ds = io.DisplaySize;
+	ImVec2 display = io.DisplaySize;
+    ImVec2 ds(1600, 1000);
+    float scale = (std::min)(display.x / ds.x, display.y / ds.y);
+    if (scale <= 0) return;
+    ImVec2 offset((display.x - ds.x * scale) * .5f, (display.y - ds.y * scale) * .5f);
+    g_canvasMouse = ImVec2((io.MousePos.x - offset.x) / scale, (io.MousePos.y - offset.y) / scale);
 	ImGui::SetNextWindowPos(ImVec2(0, 0));
-	ImGui::SetNextWindowSize(ds);
+	ImGui::SetNextWindowSize(display);
 	ImGui::SetNextWindowBgAlpha(0.0f);
 	ImGui::Begin("##sf4e-lobby", nullptr,
 		ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
 		ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNav);
 	ImDrawList* dl = ImGui::GetWindowDrawList();
+	dl->AddRectFilled(ImVec2(0,0), display, INK);
+    int firstVertex = dl->VtxBuffer.Size;
+    dl->PushClipRect(ImVec2(0,0), ImVec2((std::max)(display.x,ds.x),(std::max)(display.y,ds.y)), false);
 	DrawBackdrop(dl, ds);
 
 	Input in = ReadInput();
@@ -1565,7 +1568,10 @@ void sf4e::Lobby::Draw() {
 	case SC_RESULT: DrawResult(dl, ds, in); break;
 	}
 	DrawError(dl, ds);
-	dl->AddText(g_fontSmall, 16, ImVec2(ds.x - 200, 8), IM_COL32(255, 255, 255, 90), "sf4e rollback  test");
+	for (int i = firstVertex; i < dl->VtxBuffer.Size; ++i) {
+        auto& p = dl->VtxBuffer[i].pos; p = ImVec2(p.x * scale + offset.x, p.y * scale + offset.y);
+    }
+    dl->PopClipRect();
 	ImGui::End();
 }
 

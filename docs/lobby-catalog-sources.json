@@ -1,0 +1,479 @@
+{
+  "executable_sha256": "5d724595a8ab3c6c6d6f4959187f756f5be35bb497e51e5233c4e73b18b0b9eb",
+  "commands": {
+    "RYU": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_ryu_swan.m4s",
+      "sha256": "83b7e47d12197ee2ff2c8f0d3c93dcf412ef47e69dace144503de75be13e8e3a"
+    },
+    "KEN": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_ken_swan.m4s",
+      "sha256": "8aca72e99bc874f8adecfbd5631c8dc5fed7407c50e0301121693d774127ab53"
+    },
+    "CNL": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_cnl_swan.m4s",
+      "sha256": "b292a14ea38a3d660bffc2894ca00db5010e27d1288936c36a58cd1c2aff5c03"
+    },
+    "HND": {
+      "source": "patch_ae2_tu2/ui/command_list/localize/ENG/command_list_hnd_swan.m4s",
+      "sha256": "16c74d794273ea261c99b14656ceff7f1296cb70163e97a8bc2942e4ecf09f87"
+    },
+    "BLK": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_blk_swan.m4s",
+      "sha256": "817e5b0e6d04bd4c16a5a66bba20d98c776e5a448d5bbacc6cb9e24d1aef75a1"
+    },
+    "ZGF": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_zgf_swan.m4s",
+      "sha256": "68ba9cb916918e136704208e578364c2fe131ca33779a7a1751448614af0104a"
+    },
+    "GUL": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_gul_swan.m4s",
+      "sha256": "8930234de60bc3cb210f6d3bbe2c2996b149adbe9b48deada3241028315e879b"
+    },
+    "DSM": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_dsm_swan.m4s",
+      "sha256": "6ca7b3a32ab6911bb158550196f0a8f73e0155f04da9066823f62ad5bc159c4a"
+    },
+    "BSN": {
+      "source": "patch_ae2_tu2/ui/command_list/localize/ENG/command_list_bsn_swan.m4s",
+      "sha256": "013432db48d1a7385ff942d87f31d00e700e1d3e6fb4317956d209d879d545dc"
+    },
+    "BLR": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_blr_swan.m4s",
+      "sha256": "276808ab9528362328c8e69b11d31fa7626fe4bc58984063ef0a6bdaac6334c7"
+    },
+    "SGT": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_sgt_swan.m4s",
+      "sha256": "1527e6f066af60a7835733227bd4537e20747f7f957a20f9c5a54f54284f05a6"
+    },
+    "VEG": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_veg_swan.m4s",
+      "sha256": "1e74f18d53b9e2202923607de9b6157811d3273f21cad3de65110738d4700106"
+    },
+    "AGL": {
+      "source": "patch_ae2_tu2/ui/command_list/localize/ENG/command_list_agl_swan.m4s",
+      "sha256": "b64dedcb46684d1448ad792324a18674911129aebe440cf99280caaa306d390e"
+    },
+    "CHB": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_chb_swan.m4s",
+      "sha256": "939ab6582ae327e740ed7c1c6839e0167ab840484dfb539ff5226bec9b3cac0e"
+    },
+    "RIC": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_ric_swan.m4s",
+      "sha256": "62be527ef7b0d458b8b67e248f845024563ce3e7ed41a5712cead26c4415a24c"
+    },
+    "JHA": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_jha_swan.m4s",
+      "sha256": "d81069e798ede0dcd13ee82953545536c792c97fa8b9f23e3dbacd186873971c"
+    },
+    "BOS": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_bos_swan.m4s",
+      "sha256": "3f09cb9ef4a692840282a0d76e1f0a460fbcd5e10352239e2b5252a821a7fd06"
+    },
+    "GKI": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_gki_swan.m4s",
+      "sha256": "5470f0a061199d222f77f4415175892d17d268cf7ea60c0155e4eba796736521"
+    },
+    "GKN": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_gkn_swan.m4s",
+      "sha256": "47720bd77015ac2e24679028b79a3a481f423e1ea39331c67a3a63e6066f932e"
+    },
+    "HWK": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_hwk_swan.m4s",
+      "sha256": "49924ede77c78119bb128a69e19a053a371fcce7a9a300ee8883d84147bb445c"
+    },
+    "CMY": {
+      "source": "patch_ae2_tu2/ui/command_list/localize/ENG/command_list_cmy_swan.m4s",
+      "sha256": "135655bac1b522b5736b6110e7a94a6ec0692c1968a4756a51e1ba47a13e536b"
+    },
+    "FLN": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_fln_swan.m4s",
+      "sha256": "3ff2b645720f1fcc6e6b7483817ef6f788078883924b6d613b4f5dbc83a1a591"
+    },
+    "DJY": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_djy_swan.m4s",
+      "sha256": "15e26c6f280968d02391cfdb2d0bc2c9a7bef1e3d34322e110910d796faf8cb4"
+    },
+    "SKR": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_skr_swan.m4s",
+      "sha256": "34ffb2f4b1f3bb612eb084fdb1e998fc0c1c50dfdac988338119052225a6ea61"
+    },
+    "ROS": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_ros_swan.m4s",
+      "sha256": "563a0b21f267cd7dbcc423c3de16d47baa7494aecf23c34bf9f7f4b720da51ec"
+    },
+    "GEN": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_gen_swan.m4s",
+      "sha256": "c748e647cd5b34527d37a01838a51892049c78d1fbe1e6bae00ff3ea4d5f1b5b"
+    },
+    "DAN": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_dan_swan.m4s",
+      "sha256": "7117b13eb9f464341f1c5ec10fa368425d878d95b339dfe8e24e007804ebafc2"
+    },
+    "GUY": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_guy_swan.m4s",
+      "sha256": "7c4e4a7237dbcb30ace16508125b2764bc74dfa4a76ebe56b4c8dc20ffaf00c2"
+    },
+    "CDY": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_cdy_swan.m4s",
+      "sha256": "a35f92f362f515d63ed0c14746f8daa454755af1e61d6fdcefcfb70f154cb01c"
+    },
+    "IBK": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_ibk_swan.m4s",
+      "sha256": "68b17336d0b62c16305b8a194252c376d9895472279fbf54a63162a8bc3e4cc2"
+    },
+    "MKT": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_mkt_swan.m4s",
+      "sha256": "9ddf42dd30e002675f9701e73f4f8e04b73ec311ba6e3d9517147d5006631c54"
+    },
+    "DDL": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_ddl_swan.m4s",
+      "sha256": "b1030b388fcd3fe646d472804eab4d1e5818e3741f21bed0f074a2511a1b2d02"
+    },
+    "ADN": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_adn_swan.m4s",
+      "sha256": "a7608ffba3ae3cbce05ca3f2a98718c36fede4ab80edf9f283a306be397a4832"
+    },
+    "HKN": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_hkn_swan.m4s",
+      "sha256": "fd14297ce2f57cdc11b3b62756ba1917e63fb8c57790fd00d01ac7379b0be5dc"
+    },
+    "JRI": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_jri_swan.m4s",
+      "sha256": "f157e12b87d97281ef7b8ff2649218a65e7c89e4426370b930072dd902a6d522"
+    },
+    "YUN": {
+      "source": "patch_ae2_tu2/ui/command_list/localize/ENG/command_list_yun_swan.m4s",
+      "sha256": "06ddafdaef52555f78ff2cd94f5ea6f9ec976b1cb731b25b74bad14efc65c7df"
+    },
+    "YAN": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_yan_swan.m4s",
+      "sha256": "be050a926dcc8473b2d25e202a9ee0a711d74f77c34bc3f10cbd06cf6bcd0ed2"
+    },
+    "RYX": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_ryx_swan.m4s",
+      "sha256": "0b2c73ba95adae957fdd2def9ea689a95f77307b52d91ce4719e1bfb4ab48804"
+    },
+    "GKX": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_gkx_swan.m4s",
+      "sha256": "1ec0f1ae0d2deb8d06b845cf769f05acdef0adb42c529c43f59a472a3ddb1aba"
+    },
+    "RLN": {
+      "source": "patch_ae2_tu2/ui/command_list/localize/ENG/command_list_rln_swan.m4s",
+      "sha256": "609cf9f950735783b760caae3fe6cd08708738e339f8cefe3f476e4817e420b0"
+    },
+    "ELN": {
+      "source": "patch_ae2_tu2/ui/command_list/localize/ENG/command_list_eln_swan.m4s",
+      "sha256": "518c347178bd346aede9aa9594c5a3b9c82b680dddb7659623b918a88061b126"
+    },
+    "PSN": {
+      "source": "patch_ae2_tu2/ui/command_list/localize/ENG/command_list_psn_swan.m4s",
+      "sha256": "7dc257cfb67888d764efdf1f263b930ce10f3ce5d3c6f1181718b9c79ac49534"
+    },
+    "HUG": {
+      "source": "patch_ae2_tu2/ui/command_list/localize/ENG/command_list_hug_swan.m4s",
+      "sha256": "91f65923bf408fd6baabc942e8c2b491bddfbc429af4c10dbc3ab70fcb4f904b"
+    },
+    "DCP": {
+      "source": "patch_ae2_tu3/ui/command_list/localize/ENG/command_list_dcp_swan.m4s",
+      "sha256": "d315c8ab8ba8bd3b779d37b8602d515afbc4b168ae5153f9a758069f72066b7c"
+    }
+  },
+  "historical_commands": {
+    "RYU": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_ryu.m4s",
+      "sha256": "4641d9f0205caa3dc5f2a1d15e4ae2711ea6535aacd7d50d6981adec9ebc93aa"
+    },
+    "RYU_ssfiv": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_ryu_ssfiv.m4s",
+      "sha256": "4641d9f0205caa3dc5f2a1d15e4ae2711ea6535aacd7d50d6981adec9ebc93aa"
+    },
+    "KEN": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_ken.m4s",
+      "sha256": "a340b3e5ac36bc14077cf4abc8204975a00c43721731a6a48c5e89df9d27954c"
+    },
+    "KEN_ssfiv": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_ken_ssfiv.m4s",
+      "sha256": "a340b3e5ac36bc14077cf4abc8204975a00c43721731a6a48c5e89df9d27954c"
+    },
+    "CNL": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_cnl.m4s",
+      "sha256": "6f53526a2cd616fd559f40298e05e5eb5ad73d9498d0ef608cc3ea2d03de2a5f"
+    },
+    "CNL_ssfiv": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_cnl_ssfiv.m4s",
+      "sha256": "6f53526a2cd616fd559f40298e05e5eb5ad73d9498d0ef608cc3ea2d03de2a5f"
+    },
+    "HND": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_hnd.m4s",
+      "sha256": "1298c6c07ac0ea274546016bdf3cfe6b4a1d51a075ba600f0f1ef08194c2b7df"
+    },
+    "HND_ssfiv": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_hnd_ssfiv.m4s",
+      "sha256": "0bb288d5a8cf4d45e6d0718165c24580de91ef8944a9c896f26e4baf89281e62"
+    },
+    "BLK": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_blk.m4s",
+      "sha256": "94677bf7eccd149cccc106c9ed6d04d3336c1f26c1642bcb8e5be15115b98162"
+    },
+    "BLK_ssfiv": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_blk_ssfiv.m4s",
+      "sha256": "94677bf7eccd149cccc106c9ed6d04d3336c1f26c1642bcb8e5be15115b98162"
+    },
+    "ZGF": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_zgf.m4s",
+      "sha256": "dd8d3680f5ce11b9309e691d38666bddd18e4ba190e1b6b94d5582bdf64ce03c"
+    },
+    "ZGF_ssfiv": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_zgf_ssfiv.m4s",
+      "sha256": "dd8d3680f5ce11b9309e691d38666bddd18e4ba190e1b6b94d5582bdf64ce03c"
+    },
+    "GUL": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_gul.m4s",
+      "sha256": "36d1a64b4ff12c85d3392a7323b7cb9fda5cec24787ebd5ad903c210d3439a26"
+    },
+    "GUL_ssfiv": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_gul_ssfiv.m4s",
+      "sha256": "36d1a64b4ff12c85d3392a7323b7cb9fda5cec24787ebd5ad903c210d3439a26"
+    },
+    "DSM": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_dsm.m4s",
+      "sha256": "612a7b47424ad2e4c5ec00a03a5990d5d1e97bca3407c931aa6b1c30dd9a01e1"
+    },
+    "DSM_ssfiv": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_dsm_ssfiv.m4s",
+      "sha256": "612a7b47424ad2e4c5ec00a03a5990d5d1e97bca3407c931aa6b1c30dd9a01e1"
+    },
+    "BSN": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_bsn.m4s",
+      "sha256": "c529c68977e6b1c78e5ecbb78cbba419af3369852a4224a4eb3a379f62c65fec"
+    },
+    "BSN_ssfiv": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_bsn_ssfiv.m4s",
+      "sha256": "d91a8688f78d746f736437b489843ccf5a70258671f3827abfa0b5ded314953e"
+    },
+    "BLR": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_blr.m4s",
+      "sha256": "34b09c26dea3a076314680ee25fac0540ccbe63b509b126a2b10c8696b5b9b18"
+    },
+    "BLR_ssfiv": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_blr_ssfiv.m4s",
+      "sha256": "34b09c26dea3a076314680ee25fac0540ccbe63b509b126a2b10c8696b5b9b18"
+    },
+    "SGT": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_sgt.m4s",
+      "sha256": "abcf8e453b975173bcd4367a7b27556f60bb7c5bbf141fc0841dffaba8684154"
+    },
+    "SGT_ssfiv": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_sgt_ssfiv.m4s",
+      "sha256": "6ebc39f84c1a92ae14e633b7ea6215dea4b0896af56e57687b92312aa56beef6"
+    },
+    "VEG": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_veg.m4s",
+      "sha256": "f7830a298ceacf5851a0608067bdda52136129509ddbc626a30cc2715ea2562e"
+    },
+    "VEG_ssfiv": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_veg_ssfiv.m4s",
+      "sha256": "7ec638351e7df9b3290cf19d111c634dcd9378c20fb44e745337a6c821e55eb9"
+    },
+    "AGL": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_agl.m4s",
+      "sha256": "b3356fea9a7b69a275abbbc226cd8f50da5b42534359e57706286c0f16b0884b"
+    },
+    "AGL_ssfiv": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_agl_ssfiv.m4s",
+      "sha256": "b3356fea9a7b69a275abbbc226cd8f50da5b42534359e57706286c0f16b0884b"
+    },
+    "CHB": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_chb.m4s",
+      "sha256": "7da827bfccfeb8e6a88738f535368a895d80b3106145625e59c11a4ef397c1c6"
+    },
+    "CHB_ssfiv": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_chb_ssfiv.m4s",
+      "sha256": "7da827bfccfeb8e6a88738f535368a895d80b3106145625e59c11a4ef397c1c6"
+    },
+    "RIC": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_ric.m4s",
+      "sha256": "972d18233e315e337983810b0a9df07de89b18d9c30f5b06282e7d924a048a4b"
+    },
+    "RIC_ssfiv": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_ric_ssfiv.m4s",
+      "sha256": "972d18233e315e337983810b0a9df07de89b18d9c30f5b06282e7d924a048a4b"
+    },
+    "JHA": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_jha.m4s",
+      "sha256": "b2cd4c2df46847f6080838a1db2ba0dc1310dba112979deab4a1fb3e40823202"
+    },
+    "JHA_ssfiv": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_jha_ssfiv.m4s",
+      "sha256": "b2cd4c2df46847f6080838a1db2ba0dc1310dba112979deab4a1fb3e40823202"
+    },
+    "BOS": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_bos.m4s",
+      "sha256": "7caa345fc57f6eef1451defb7329e45fa945cda3ea2a85df56c14c9999600244"
+    },
+    "BOS_ssfiv": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_bos_ssfiv.m4s",
+      "sha256": "7caa345fc57f6eef1451defb7329e45fa945cda3ea2a85df56c14c9999600244"
+    },
+    "GKI": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_gki.m4s",
+      "sha256": "e842badc4b2fc0eaa5bfd74db3ce15d3e0a5fbfc8c4b0d5279e5f05f0eb95168"
+    },
+    "GKI_ssfiv": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_gki_ssfiv.m4s",
+      "sha256": "e842badc4b2fc0eaa5bfd74db3ce15d3e0a5fbfc8c4b0d5279e5f05f0eb95168"
+    },
+    "GKN": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_gkn.m4s",
+      "sha256": "87b9a457e7c279cdf4a091561beba16195d6f6a7e1015d27d835d43584262c32"
+    },
+    "GKN_ssfiv": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_gkn_ssfiv.m4s",
+      "sha256": "a1ed2ecc4e9bb52a878a7aff670936cd43c28ffee58a54c7d6482afcb379d9e3"
+    },
+    "HWK": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_hwk.m4s",
+      "sha256": "5baace3616dbac940da585f8b5a581ae283bc89b94192da4848c97c573661e4d"
+    },
+    "HWK_ssfiv": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_hwk_ssfiv.m4s",
+      "sha256": "9cbfddc3575b1055535b4bd168f5799cfd48e6bd43be0b62e74a256d9c40e3c7"
+    },
+    "CMY": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_cmy.m4s",
+      "sha256": "e398500140876b7b18eeba1820f41fc70876b9bde3ff30e297ea019b123390f9"
+    },
+    "CMY_ssfiv": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_cmy_ssfiv.m4s",
+      "sha256": "e398500140876b7b18eeba1820f41fc70876b9bde3ff30e297ea019b123390f9"
+    },
+    "FLN": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_fln.m4s",
+      "sha256": "2e80b7b07df657f4edf95980c79e637014d27aa60aa87a3429ec6f06f4bb76dd"
+    },
+    "FLN_ssfiv": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_fln_ssfiv.m4s",
+      "sha256": "2e80b7b07df657f4edf95980c79e637014d27aa60aa87a3429ec6f06f4bb76dd"
+    },
+    "DJY": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_djy.m4s",
+      "sha256": "c41ac25b28cb3bc7860db2be26c2f7ed279571bfdb450004596518a062795224"
+    },
+    "DJY_ssfiv": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_djy_ssfiv.m4s",
+      "sha256": "c41ac25b28cb3bc7860db2be26c2f7ed279571bfdb450004596518a062795224"
+    },
+    "SKR": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_skr.m4s",
+      "sha256": "60093911f3e9879d1e31787759164ffa99facd7f241802e0d6347cb7dab24331"
+    },
+    "SKR_ssfiv": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_skr_ssfiv.m4s",
+      "sha256": "60093911f3e9879d1e31787759164ffa99facd7f241802e0d6347cb7dab24331"
+    },
+    "ROS": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_ros.m4s",
+      "sha256": "fb739e66c3fe6cb0368aeecb0eb58b2c44759d26ae6044b9bdd6b1e3dd320745"
+    },
+    "ROS_ssfiv": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_ros_ssfiv.m4s",
+      "sha256": "fb739e66c3fe6cb0368aeecb0eb58b2c44759d26ae6044b9bdd6b1e3dd320745"
+    },
+    "GEN": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_gen.m4s",
+      "sha256": "d96759fddae65b2662393534c63b3926fe0c10b3b22a6feaa59024e2fe33ddd9"
+    },
+    "GEN_ssfiv": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_gen_ssfiv.m4s",
+      "sha256": "615932458747497c6245af984e1f33b0b381fc685d07bc7f2c302b56080d8c60"
+    },
+    "DAN": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_dan.m4s",
+      "sha256": "a52c900d26bd68e0c778006f48b24872e0285707ca9195d36ef4a008894cb60c"
+    },
+    "DAN_ssfiv": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_dan_ssfiv.m4s",
+      "sha256": "a52c900d26bd68e0c778006f48b24872e0285707ca9195d36ef4a008894cb60c"
+    },
+    "GUY": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_guy.m4s",
+      "sha256": "b395844de11d7f4990e7ca38816df3789ef214676b4d357862c81e15cadb3317"
+    },
+    "GUY_ssfiv": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_guy_ssfiv.m4s",
+      "sha256": "b395844de11d7f4990e7ca38816df3789ef214676b4d357862c81e15cadb3317"
+    },
+    "CDY": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_cdy.m4s",
+      "sha256": "50462d56acf50ac5c7faa092a85c0354722b21aeafdd7994d64b652a0fc4bed6"
+    },
+    "CDY_ssfiv": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_cdy_ssfiv.m4s",
+      "sha256": "50462d56acf50ac5c7faa092a85c0354722b21aeafdd7994d64b652a0fc4bed6"
+    },
+    "IBK": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_ibk.m4s",
+      "sha256": "e8d8567b6c506119fc802c8ab978681b591edc562340c5096757f9317e155a7b"
+    },
+    "IBK_ssfiv": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_ibk_ssfiv.m4s",
+      "sha256": "e90c5c97838f264742ee86beecd3d1fb4347981e3cd0abd14b99f6b18cba1152"
+    },
+    "MKT": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_mkt.m4s",
+      "sha256": "5e5263aef9fd676b104998e985806a03bef0580bc9fdad3eef187b05ce1f5338"
+    },
+    "MKT_ssfiv": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_mkt_ssfiv.m4s",
+      "sha256": "d45b69b58009d9f4854db2bdbb3597e8219b997393cd7a8b31fa0682917880d7"
+    },
+    "DDL": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_ddl.m4s",
+      "sha256": "c96b909755b38983b1722baea046af59083bc984ac5386ca6e3aca565aa0740a"
+    },
+    "DDL_ssfiv": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_ddl_ssfiv.m4s",
+      "sha256": "c96b909755b38983b1722baea046af59083bc984ac5386ca6e3aca565aa0740a"
+    },
+    "ADN": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_adn.m4s",
+      "sha256": "dc4f4da9472994c500caacb617d72f4998819ddb86a23e0d981198cd79238dfc"
+    },
+    "ADN_ssfiv": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_adn_ssfiv.m4s",
+      "sha256": "dc4f4da9472994c500caacb617d72f4998819ddb86a23e0d981198cd79238dfc"
+    },
+    "HKN": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_hkn.m4s",
+      "sha256": "3605c58c7b686a53aa2807d33d877240f57e7bc2842b3161811768923e14d0c0"
+    },
+    "HKN_ssfiv": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_hkn_ssfiv.m4s",
+      "sha256": "e5fb70154cf845710a2f053e9859bd7c0eb8cd940d8a1f5d02cf619471f40d9e"
+    },
+    "JRI": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_jri.m4s",
+      "sha256": "aeaef5554bbae11121e40d0284f6335e183528b19dee76eacfa924d86f5d415a"
+    },
+    "JRI_ssfiv": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_jri_ssfiv.m4s",
+      "sha256": "aeaef5554bbae11121e40d0284f6335e183528b19dee76eacfa924d86f5d415a"
+    },
+    "YUN": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_yun.m4s",
+      "sha256": "4d83dd3e827b4f42ff8d091a9e89970cfe6df74c290f44c5ec18747b9b6157ec"
+    },
+    "YAN": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_yan.m4s",
+      "sha256": "4f4b87f9bd09e4995114619654df9b5856671142b7f8ba89021f4f344611e576"
+    },
+    "RYX": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_ryx.m4s",
+      "sha256": "073f66ed64990b3683466b8993c6b0a55ab29e708e33dfc83e14b8872182e801"
+    },
+    "GKX": {
+      "source": "patch_ae2/ui/command_list/localize/ENG/command_list_gkx.m4s",
+      "sha256": "51ac3d676dc6fdf23d75864734991f0e3df6e3e1ea36f737bad9c78e86a2fea9"
+    }
+  }
+}

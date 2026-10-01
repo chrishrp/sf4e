@@ -2,9 +2,9 @@ cmake_minimum_required (VERSION 3.21)
 
 project (
     sf4e
-    VERSION 1.0.2
+    VERSION 1.1.0
     DESCRIPTION "A process-inspection and modification tool for the Steam release of Ultra Street Fighter 4."
-    HOMEPAGE_URL "https://gitlab.com/adanducci/sf4e"
+    HOMEPAGE_URL "https://github.com/chrishrp/sf4e"
 )
 
 set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -DDEBUG")
@@ -31,6 +31,7 @@ if(WIN32)
     find_package(ggpo CONFIG REQUIRED)
     find_package(imgui CONFIG REQUIRED)
     find_package(protobuf CONFIG REQUIRED)
+    find_package(ZLIB REQUIRED)
 
     find_path(VALVEFILEVDF_INCLUDE_DIRS "vdf_parser.hpp")
 endif()
@@ -39,6 +40,9 @@ endif()
 # These exist to inject into and reverse the Windows game binary. The lobby
 # server below is deliberately independent of all of them.
 if(WIN32)
+
+add_library(PortraitArchive STATIC "src/sf4e/sf4e__PortraitArchive.cxx")
+target_link_libraries(PortraitArchive PUBLIC ZLIB::ZLIB)
 
 add_library(Dimps STATIC
     "src/Dimps/Dimps.hxx"
@@ -111,6 +115,8 @@ add_library(sf4e STATIC
     "src/sf4e/sf4e__GameEvents.cxx"
     "src/sf4e/sf4e__Lobby.hxx"
     "src/sf4e/sf4e__Lobby.cxx"
+    "src/sf4e/sf4e__LobbyView.cxx"
+    "src/sf4e/sf4e__LobbyPortraits.cxx"
     "src/sf4e/sf4e__Matchmaker.hxx"
     "src/sf4e/sf4e__Matchmaker.cxx"
     "src/sf4e/sf4e__Overlay.hxx"
@@ -126,7 +132,7 @@ add_library(sf4e STATIC
 )
 target_link_libraries(
     sf4e
-    PRIVATE ${LIB_DETOURS} Session "Kernel32" "ws2_32" "Mswsock" "AdvApi32" "Shlwapi" "Bcrypt" "Xinput9_1_0" "Dbghelp" "Shell32"
+    PRIVATE ${LIB_DETOURS} Session PortraitArchive "Kernel32" "ws2_32" "Mswsock" "AdvApi32" "Shlwapi" "Bcrypt" "Xinput9_1_0" "Dbghelp" "Shell32" "d3d9" "windowscodecs" "ole32"
     PUBLIC imgui::imgui nlohmann_json::nlohmann_json spdlog::spdlog GameNetworkingSockets::shared ggpo::GGPO
 )
 
@@ -161,6 +167,21 @@ target_link_libraries(
     Session
     PUBLIC nlohmann_json::nlohmann_json spdlog::spdlog GameNetworkingSockets::shared
 )
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(LobbyCatalogTest tests/lobby_catalog_test.cxx)
+    add_test(NAME LobbyCatalog COMMAND LobbyCatalogTest)
+    add_executable(RoomScoreTest tests/room_score_test.cxx)
+    add_test(NAME RoomScore COMMAND RoomScoreTest)
+    add_executable(RoomProtocolTest tests/room_protocol_test.cxx)
+    target_link_libraries(RoomProtocolTest PRIVATE Session)
+    add_test(NAME RoomProtocol COMMAND RoomProtocolTest)
+    if(WIN32)
+        add_executable(PortraitArchiveTest tests/portrait_archive_test.cxx)
+        target_link_libraries(PortraitArchiveTest PRIVATE PortraitArchive)
+        add_test(NAME PortraitArchive COMMAND PortraitArchiveTest)
+    endif()
+endif()
 if(WIN32)
     target_link_libraries(Session PRIVATE Dimps)
 endif()
@@ -198,13 +219,16 @@ target_include_directories(Launcher PRIVATE ${VALVEFILEVDF_INCLUDE_DIRS} "${CMAK
 target_link_libraries(Launcher PRIVATE ${LIB_DETOURS} CLI11::CLI11 spdlog::spdlog "shlwapi" "pathcch")
 
 add_library(Sidecar SHARED src/sidecar/sidecar.cxx)
+
+add_executable(LobbyPreview tools/lobby_preview.cxx src/sf4e/sf4e__LobbyView.cxx src/sf4e/sf4e__LobbyPortraits.cxx)
+target_link_libraries(LobbyPreview PRIVATE PortraitArchive imgui::imgui spdlog::spdlog "d3d9" "windowscodecs" "ole32")
 target_include_directories(Sidecar PRIVATE ${VALVEFILEVDF_INCLUDE_DIRS})
 target_link_libraries(Sidecar PRIVATE ${LIB_DETOURS} Dimps sf4e)
 
 target_compile_definitions(Launcher PRIVATE -D_UNICODE -DUNICODE)
 
 install(
-  TARGETS Launcher Sidecar
+  TARGETS Launcher Sidecar LobbyServer
   RUNTIME DESTINATION "."
   LIBRARY DESTINATION "."
 )
@@ -231,9 +255,26 @@ install(
 install(
   FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/INSTALL.md"
+    "${CMAKE_CURRENT_SOURCE_DIR}/SERVER.md"
+    "${CMAKE_CURRENT_SOURCE_DIR}/server.txt"
     "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE"
   DESTINATION "."
 )
+
+install(FILES
+  "${CMAKE_CURRENT_SOURCE_DIR}/docs/ARCADE-LOBBY.md"
+  "${CMAKE_CURRENT_SOURCE_DIR}/docs/room-scores.md"
+  "${CMAKE_CURRENT_SOURCE_DIR}/docs/MODDING-FEASIBILITY.md"
+  "${CMAKE_CURRENT_SOURCE_DIR}/docs/LOBBY_CATALOG.md"
+  "${CMAKE_CURRENT_SOURCE_DIR}/docs/PORTRAITS.md"
+  DESTINATION "docs"
+)
+
+# App-local release CRT for the supported Windows 10+ runtime.
+set(CMAKE_INSTALL_SYSTEM_RUNTIME_DESTINATION ".")
+set(CMAKE_INSTALL_DEBUG_LIBRARIES FALSE)
+set(CMAKE_INSTALL_UCRT_LIBRARIES FALSE)
+include(InstallRequiredSystemLibraries)
 
 # License texts of the bundled dependencies, as their licenses require.
 file(GLOB _copyrights "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/share/*/copyright")

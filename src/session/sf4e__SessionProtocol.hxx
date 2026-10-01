@@ -10,6 +10,7 @@
 #include <nlohmann/json.hpp>
 
 #include "../Dimps/Dimps__Math.hxx"
+#include "sf4e__RoomScore.hxx"
 
 // The lobby server builds for Linux, where the game-reversing headers cannot
 // follow: Dimps__GameEvents.hxx reaches Dimps__Platform.hxx, which includes
@@ -25,6 +26,7 @@
 #define MAX_SF4E_SPECTATORS 2
 
 namespace sf4e {
+	NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(RoomScore, wins, losses);
 	namespace SessionProtocol {
 		typedef Dimps::Math::FixedPoint FixedPoint;
 
@@ -117,6 +119,12 @@ namespace sf4e {
 			bool spectator = false;
 			bool watching = false;
 			uint16_t hostPort = 0;
+
+			// Server-owned totals for this room visit. These travel with the
+			// member when winner-stays changes sides. Rejoining creates a new
+			// identity; an unauthenticated display name cannot reclaim a score.
+			uint64_t roomMemberId = 0;
+			RoomScore roomScore;
 		};
 
 		struct LobbyData {
@@ -126,6 +134,8 @@ namespace sf4e {
 			FixedPoint roundTime;
 			bool isPublic = false;
 			std::vector<MemberData> members;
+			// False when connected to a server predating shared room scores.
+			bool roomScoresAvailable = false;
 
 			static const LobbyData NULL_LOBBY;
 		};
@@ -137,10 +147,16 @@ namespace sf4e {
 
 			int64_t readyMessageNum[2];
 			CharaConditions chara[2];
+			// Zero until a player sends a pick; lets the lobby distinguish an
+			// actual Ryu selection (ID 0) from an empty seat's zeroed conditions.
+			uint64_t charaMemberId[2] = { 0, 0 };
 			int64_t stageID;
 			uint32_t rngSeed;   // was DWORD; identical width, and portable
 			// Per seat as chosen; both stamped with the higher value once ready.
 			int32_t inputDelay[2];
+			// Assigned by the server when both players ready up. Zero means no
+			// active match (or an older server that does not support scores).
+			uint64_t matchId = 0;
 		};
 
 		enum MessageType {
@@ -269,7 +285,8 @@ namespace sf4e {
 
 		struct LobbyReportResults {
 			MessageType type = MT_LOBBY_REPORTRESULTS;
-			int32_t loserSide;
+			int32_t loserSide = -1;
+			uint64_t matchId = 0;
 		};
 
 		struct PreBattleSetEnv {
@@ -301,6 +318,7 @@ namespace sf4e {
 		// not opt in" -- stay on the relay.
 		struct DesyncReport {
 			MessageType type = MT_DESYNC_REPORT;
+			uint64_t matchId = 0;
 			int32_t frame = 0;
 			// Did the authoritative state fork, or was it only cosmetic drift?
 			bool gameplay = false;
@@ -418,8 +436,24 @@ namespace sf4e {
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ConnectionID, host, user);
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(LobbyID, host, key);
 
-		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(MemberData, connId, name, ip, port, spectator, watching, hostPort);
-		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(LobbyData, id, editionSelect, roundCount, roundTime, members, isPublic);
+		inline void to_json(nlohmann::json& j, const MemberData& m) {
+			j = nlohmann::json{ {"connId", m.connId}, {"name", m.name}, {"ip", m.ip},
+				{"port", m.port}, {"spectator", m.spectator}, {"watching", m.watching},
+				{"hostPort", m.hostPort}, {"roomMemberId", m.roomMemberId}, {"roomScore", m.roomScore} };
+		}
+		inline void from_json(const nlohmann::json& j, MemberData& m) {
+			j.at("connId").get_to(m.connId);
+			j.at("name").get_to(m.name);
+			j.at("ip").get_to(m.ip);
+			j.at("port").get_to(m.port);
+			m.flags = 0;
+			m.spectator = j.value("spectator", false);
+			m.watching = j.value("watching", false);
+			m.hostPort = j.value("hostPort", uint16_t(0));
+			m.roomMemberId = j.value("roomMemberId", uint64_t(0));
+			m.roomScore = j.value("roomScore", RoomScore());
+		}
+		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(LobbyData, id, editionSelect, roundCount, roundTime, members, isPublic, roomScoresAvailable);
 		// Explicit rather than the macro: MatchData holds C arrays, which the
 		// _WITH_DEFAULT form cannot assign, and inputDelay must default when a
 		// server that predates it leaves the key out.
@@ -427,16 +461,21 @@ namespace sf4e {
 			j = nlohmann::json{
 				{"readyMessageNum", m.readyMessageNum},
 				{"chara", m.chara},
+				{"charaMemberId", m.charaMemberId},
 				{"stageID", m.stageID},
 				{"rngSeed", m.rngSeed},
 				{"inputDelay", m.inputDelay},
+				{"matchId", m.matchId},
 			};
 		}
 		inline void from_json(const nlohmann::json& j, MatchData& m) {
 			j.at("readyMessageNum").get_to(m.readyMessageNum);
 			j.at("chara").get_to(m.chara);
+			if (j.contains("charaMemberId")) j.at("charaMemberId").get_to(m.charaMemberId);
+			else m.charaMemberId[0] = m.charaMemberId[1] = 0;
 			j.at("stageID").get_to(m.stageID);
 			j.at("rngSeed").get_to(m.rngSeed);
+			m.matchId = j.value("matchId", uint64_t(0));
 			if (j.contains("inputDelay")) {
 				j.at("inputDelay").get_to(m.inputDelay);
 			}
@@ -453,11 +492,11 @@ namespace sf4e {
 
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(LobbyReady, type, inputDelay, ready);
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(LobbyAllReady, type);
-		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(LobbyReportResults, type, loserSide);
+		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(LobbyReportResults, type, loserSide, matchId);
 
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(PreBattleSetChara, type, chara);
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(DirectOffer, type, ip, port, localIp, localPort);
-		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(DesyncReport, type, frame, gameplay, flowDiffers, inputDelay, direct, pingMs, diff);
+		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(DesyncReport, type, matchId, frame, gameplay, flowDiffers, inputDelay, direct, pingMs, diff);
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(DirectPeer, type, ip, port, localIp, localPort, token);
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(PreBattleSetEnv, type, rngSeed);
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(PreBattleSetStage, type, stageID);

@@ -42,6 +42,7 @@
 #include "sf4e__Game__Battle__Vfx.hxx"
 #include "sf4e__GameEvents.hxx"
 #include "sf4e__Lobby.hxx"
+#include "sf4e__LobbyPortraits.hxx"
 #include "sf4e__Matchmaker.hxx"
 #include "sf4e__Overlay.hxx"
 #include "sf4e__Pad.hxx"
@@ -2304,6 +2305,7 @@ void Overlay::InitializeOverlay(HWND hWnd, IDirect3DDevice9* lpDevice) {
 	ImGui::GetPlatformIO().Platform_SetImeDataFn = nullptr;
 	ImGui_ImplWin32_Init(hWnd);
 	ImGui_ImplDX9_Init(lpDevice);
+	sf4e::LobbyPortraits::Load(lpDevice);
 	fMainMenu::OnModeSelectedOverride = OnMainMenuModeSelected;
 	g_overlayReady = true;
 }
@@ -2607,6 +2609,7 @@ void Overlay::FreeOverlay() {
 		return;
 	}
 	g_overlayReady = false;
+	sf4e::LobbyPortraits::Release();
 	ImGui_ImplDX9_Shutdown();
 	ImGui_ImplWin32_Shutdown();
 	ImGui::DestroyContext();

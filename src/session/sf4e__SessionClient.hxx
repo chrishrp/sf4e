@@ -75,7 +75,12 @@ namespace sf4e {
 
 		EResult Lobby_Ready(int inputDelay);
 		EResult Lobby_Unready();
+		// Original P1 reports once; -1 means draw/abort, without a win or loss.
 		EResult Lobby_ReportResults(int loserSide);
+		// Snapshots from all-ready; current lobby seats may already have
+		// rotated by the time the game finishes showing its result.
+		int ActiveMatchSide() const { return _activeMatchSide; }
+		int ActiveMatchCharacter(int side) const { return side >= 0 && side < 2 ? _activeMatchChara[side] : -1; }
 
 		EResult PreBattle_SetEnv(uint32_t rngSeed);
 		EResult PreBattle_SetChara(const Dimps::GameEvents::VsMode::ConfirmedCharaConditions& chara);
@@ -138,6 +143,12 @@ namespace sf4e {
 		std::map<int, SessionProtocol::StateSnapshot> pendingRemoteSnapshots;
 		SessionProtocol::ConnectionID _cid;
 	private:
+		// Captured on all-ready so a newer lobby update cannot attach an old
+		// game's result to a different match after the players have rotated.
+		uint64_t _activeMatchId = 0;
+		int _activeMatchSide = -1;
+		int _activeMatchChara[2] = { -1, -1 };
+		bool _activeMatchReported = false;
 
 		// Opt-in direct play; see EnableDirect().
 		HolePunch _punch;

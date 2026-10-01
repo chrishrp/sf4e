@@ -355,6 +355,16 @@ int SessionClient::Step()
 			}
 		}
 		else if (type == SessionProtocol::MT_LOBBY_ALLREADY) {
+			_activeMatchId = _matchData.matchId;
+			_activeMatchSide = -1;
+			_activeMatchReported = false;
+			int side = 0;
+			for (auto& member : _lobbyData.members) {
+				if (member.spectator) continue;
+				if (member.connId == _cid && side < 2) _activeMatchSide = side;
+				++side;
+			}
+			for (int i = 0; i < 2; ++i) _activeMatchChara[i] = _matchData.chara[i].charaID;
 			_callbacks.OnReady(this, _callbacks);
 		}
 		else if (type == SessionProtocol::MT_BATTLE_SYNCED) {
@@ -466,6 +476,14 @@ int SessionClient::Step()
 			}
 		}
 		else if (type == SessionProtocol::MT_DESYNC_REPORT) {
+			SessionProtocol::DesyncReport report;
+			try {
+				msg.get_to(report);
+			}
+			catch (const json::exception&) {
+				continue;
+			}
+			if (_lobbyData.roomScoresAvailable && (_activeMatchId == 0 || report.matchId != _activeMatchId)) continue;
 			// The other player hit a fork and is leaving. We may not have seen
 			// it ourselves -- detection needs a snapshot from both sides at the
 			// same frame, and whoever gets there first reports it. Leaving only
@@ -677,10 +695,15 @@ EResult SessionClient::Lobby_Unready()
 
 EResult SessionClient::Lobby_ReportResults(int loserSide)
 {
+	if (_activeMatchReported) return k_EResultOK;
+	if (_activeMatchSide != 0) return k_EResultInvalidState;
+	if (loserSide < -1 || loserSide > 1) return k_EResultInvalidParam;
 	SessionProtocol::LobbyReportResults r;
 	r.loserSide = loserSide;
+	r.matchId = _activeMatchId;
 	json msg = r;
 	EResult result = Send(msg, nullptr);
+	if (result == k_EResultOK) _activeMatchReported = true;
 	if (result != k_EResultOK) {
 		spdlog::warn("Client: could not report results! Result: {}", (int)result);
 	}
@@ -941,6 +964,7 @@ void SessionClient::ReportDesync(int frame, bool gameplay, bool flowDiffers, con
 	_desyncReported = true;
 
 	SessionProtocol::DesyncReport r;
+	r.matchId = _activeMatchId;
 	r.frame = frame;
 	r.gameplay = gameplay;
 	r.flowDiffers = flowDiffers;

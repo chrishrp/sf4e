@@ -75,6 +75,7 @@ SessionServer::SessionServer(std::string identity, std::string sidecarHash, bool
 	_lobbyData.editionSelect = editionSelect;
 	_lobbyData.roundCount = roundCount;
 	_lobbyData.roundTime = roundTime;
+	_lobbyData.roomScoresAvailable = true;
 	clients.reserve(MAX_SF4E_PROTOCOL_USERS + 1);
 	_pollGroup = _interface->CreatePollGroup();
 }
@@ -149,7 +150,24 @@ int SessionServer::PlayerCount() const {
 }
 
 void SessionServer::OnMembershipChanged() {
-	// Deliberately does NOT touch the picks or the ready flags.
+	// Leaving mid-match cancels its result entitlement. A new player in the
+	// same seat or a recycled connection handle must never inherit that loss.
+	if (_roomScores.ActiveMatchId() != 0 && (PlayerCount() != 2
+		|| !_roomScores.HasPlayers(clients[0].data.roomMemberId, clients[1].data.roomMemberId))) {
+		_roomScores.Cancel();
+		_matchData.matchId = 0;
+		_matchData.readyMessageNum[0] = _matchData.readyMessageNum[1] = -1;
+		_matchData.inputDelay[0] = _matchData.inputDelay[1] = -1;
+		for (auto& member : clients) member.data.watching = false;
+		ResetBattleSync();
+		if (_matchStartMs != 0) {
+			LogStat("match_end", { {"seconds", (int)((NowMs() - _matchStartMs) / 1000)},
+				{"spectators", SpectatorCount()}, {"reported", false} });
+			_matchStartMs = 0;
+		}
+	}
+	// Apart from cancelling an active match whose players changed above,
+	// keep the picks and ready flags for the players who still occupy a seat.
 	//
 	// It used to clear both, to stop a stale seat-indexed pick describing the
 	// wrong player. DropCharaFromVacatedSeats() now does that precisely, by
@@ -172,9 +190,11 @@ void SessionServer::DropCharaFromVacatedSeats() {
 	// desync at frame 60 with mismatched vitmax, which is exactly what it was.
 	for (int side = 0; side < 2; side++) {
 		bool occupied = (int)clients.size() > side && !clients.at(side).data.spectator;
-		bool sameOwner = occupied && _charaOwner[side] == clients.at(side).data.connId;
-		if (!sameOwner && _matchData.chara[side].charaID != 0) {
+		bool sameOwner = occupied && _charaOwner[side] == clients.at(side).data.connId
+			&& _matchData.charaMemberId[side] == clients.at(side).data.roomMemberId;
+		if (!sameOwner && (_matchData.charaMemberId[side] != 0 || _matchData.readyMessageNum[side] != -1)) {
 			memset(&_matchData.chara[side], 0, sizeof(_matchData.chara[side]));
+			_matchData.charaMemberId[side] = 0;
 			_matchData.readyMessageNum[side] = -1;
 			_charaOwner[side] = SessionProtocol::ConnectionID();
 			_dataDirty = true;
@@ -277,9 +297,12 @@ void SessionServer::SetSidecarHash(const std::string& hash) {
 
 void SessionServer::ResetLobby() {
 	_matchData.Clear();
+	_roomScores.Cancel();
+	_matchStartMs = 0;
 	_desyncReports = 0;
 	for (auto iter = clients.begin(); iter != clients.end(); iter++) {
 		iter->data.watching = false;
+		iter->data.roomScore = RoomScore();
 	}
 	ResetBattleSync();
 	_dataDirty = true;
@@ -407,9 +430,12 @@ int SessionServer::Step()
 				_dataDirty = true;
 			}
 			else if (type == SessionProtocol::MT_PREBATTLE_SETCHARA) {
+				// Live previews can race an unready request with the opponent's
+				// ready. Once all-ready freezes a match, its picks cannot change.
+				if (_roomScores.ActiveMatchId() != 0) continue;
 				int side = -1;
 				for (int i = 0; i < 2; i++) {
-					if (clients.size() > i && clients.at(i).conn == conn) {
+					if (clients.size() > i && !clients.at(i).data.spectator && clients.at(i).conn == conn) {
 						side = i;
 						break;
 					}
@@ -434,6 +460,7 @@ int SessionServer::Step()
 				}
 				_matchData.chara[side] = request.chara;
 				_charaOwner[side] = clients.at(side).data.connId;
+				_matchData.charaMemberId[side] = clients.at(side).data.roomMemberId;
 				_dataDirty = true;
 			}
 			else if (type == SessionProtocol::MT_DESYNC_REPORT) {
@@ -449,10 +476,14 @@ int SessionServer::Step()
 				for (int i = 0; i < PlayerCount(); i++) {
 					if (clients.at(i).conn == conn) fromPlayer = true;
 				}
-				if (!fromPlayer || _desyncReports >= 20) {
+				if (!fromPlayer || _desyncReports >= 20 || report.matchId == 0
+					|| report.matchId != _roomScores.ActiveMatchId()) {
 					continue;
 				}
 				_desyncReports++;
+				// A reported fork aborts the match on both clients. Even if P1
+				// had already reached a result screen, it must not award a win.
+				_roomScores.MarkInconclusive();
 				report.diff = report.diff.substr(0, 512);
 				msg = report;
 				// Recorded like any other statistic: no name, no address. The
@@ -522,6 +553,7 @@ int SessionServer::Step()
 				MaybeExchangeDirectEndpoints();
 			}
 			else if (type == SessionProtocol::MT_PREBATTLE_SETENV) {
+				if (_roomScores.ActiveMatchId() != 0 || PlayerCount() == 0) continue;
 				int side = -1;
 				for (int i = 0; i < 2; i++) {
 					if (clients.size() > i && clients.at(i).conn == conn) {
@@ -546,6 +578,7 @@ int SessionServer::Step()
 				_dataDirty = true;
 			}
 			else if (type == SessionProtocol::MT_PREBATTLE_SETSTAGE) {
+				if (_roomScores.ActiveMatchId() != 0 || PlayerCount() == 0) continue;
 				int side = -1;
 				for (int i = 0; i < 2; i++) {
 					if (clients.size() > i && clients.at(i).conn == conn) {
@@ -590,7 +623,7 @@ int SessionServer::Step()
 			else if (type == SessionProtocol::MT_LOBBY_READY) {
 				int side = -1;
 				for (int i = 0; i < 2; i++) {
-					if (clients.size() > i && clients.at(i).conn == conn) {
+					if (clients.size() > i && !clients.at(i).data.spectator && clients.at(i).conn == conn) {
 						side = i;
 						break;
 					}
@@ -617,16 +650,25 @@ int SessionServer::Step()
 					}
 					continue;
 				}
+				// An extra ready packet must not create another match or change
+				// the identity against which its eventual result is validated.
+				if (_matchData.IsAllReady() || _roomScores.ActiveMatchId() != 0) continue;
+				DropCharaFromVacatedSeats();
+				// Every ready must refer to a pick made by this occupant. Without
+				// this check, a bare ready or a newly filled seat can start a match
+				// that the final ownership cleanup immediately invalidates.
+				if (_matchData.charaMemberId[side] != clients[side].data.roomMemberId) continue;
 				_matchData.readyMessageNum[side] = pIncomingMsg->GetMessageNumber();
 				_matchData.inputDelay[side] = request.inputDelay;
-				if (_matchData.IsAllReady()) {
+				if (_matchData.IsAllReady() && PlayerCount() == 2) {
 					int a = _matchData.inputDelay[0] < 0 ? 0 : _matchData.inputDelay[0];
 					int b = _matchData.inputDelay[1] < 0 ? 0 : _matchData.inputDelay[1];
 					int shared = a > b ? a : b;
 					spdlog::info("Match delay {} frames (seats chose {} and {})", shared, a, b);
 					_matchData.inputDelay[0] = _matchData.inputDelay[1] = shared;
+					_matchData.matchId = _roomScores.Begin(clients[0].data.roomMemberId, clients[1].data.roomMemberId);
 				}
-				bSendLobbyAllReady = bSendLobbyAllReady || _matchData.IsAllReady();
+				bSendLobbyAllReady = bSendLobbyAllReady || _matchData.matchId != 0;
 				_dataDirty = true;
 			}
 			else if (type == SessionProtocol::MT_LOBBY_REPORTRESULTS) {
@@ -639,8 +681,7 @@ int SessionServer::Step()
 					continue;
 				}
 
-				HandleResults(request.loserSide);
-				_dataDirty = true;
+				HandleResults(conn, request);
 			}
 			else if (type == SessionProtocol::MT_BATTLE_SNAPSHOT) {
 				// Forward the snapshot to every other client. Spectators only
@@ -693,7 +734,7 @@ int SessionServer::Step()
 		_dataDirty = false;
 	}
 
-	if (bSendLobbyAllReady) {
+	if (bSendLobbyAllReady && _matchData.IsAllReady() && _matchData.matchId != 0) {
 		// The spectators in the room right now are the ones P1 will wait for.
 		// Anyone joining later watches the next match.
 		SessionProtocol::SessionDataUpdate updateMsg;
@@ -933,6 +974,7 @@ SessionProtocol::JoinResult SessionServer::RegisterToWait(
 	}
 
 	for (auto iter = clients.begin(); iter != clients.end(); iter++) {
+		if (iter->conn == conn) return SessionProtocol::JR_REQUEST_INVALID;
 		if (iter->data.name == name) {
 			return SessionProtocol::JR_NAME_TAKEN;
 		}
@@ -965,6 +1007,7 @@ SessionProtocol::JoinResult SessionServer::RegisterToWait(
 	newMember.data.port = reportedPort;
 	newMember.data.flags = 0;
 	newMember.data.spectator = spectator;
+	newMember.data.roomMemberId = ++_nextRoomMemberId;
 	if (spectator && _spectatorRelayBase != 0) {
 		// Lowest free pipe. Slots stick to a member for as long as it stays,
 		// so everyone reads the same ports whenever they look.
@@ -1023,26 +1066,34 @@ void SessionServer::LogStat(const std::string& event, const nlohmann::json& fiel
 	fclose(f);
 }
 
-void SessionServer::HandleResults(int loserIndex) {
+void SessionServer::HandleResults(HSteamNetConnection reporter, const SessionProtocol::LobbyReportResults& result) {
+	if (PlayerCount() != 2 || !_matchData.IsAllReady()) return;
+	uint64_t reporterId = 0;
+	for (int side = 0; side < 2; ++side) {
+		if (clients[side].conn == reporter) reporterId = clients[side].data.roomMemberId;
+	}
+	const int loserIndex = _roomScores.IsInconclusive() ? -1 : result.loserSide;
+	if (!_roomScores.Finish(result.matchId, reporterId, result.loserSide,
+		clients[0].data.roomMemberId, clients[1].data.roomMemberId,
+		clients[0].data.roomScore, clients[1].data.roomScore)) {
+		spdlog::debug("Server: ignored unauthorized, duplicate or stale result for match {}", result.matchId);
+		return;
+	}
+	_matchData.matchId = 0;
+	_dataDirty = true;
 	// A result arrived, so the match finished rather than being abandoned.
 	// Duration tells us whether people are playing full sets or bouncing off
 	// something after a few seconds, which is the whole point of collecting it.
 	if (_matchStartMs != 0) {
 		uint64_t elapsed = NowMs() - _matchStartMs;
-		// A result arriving within seconds of this match STARTING belongs to
-		// the previous match, delayed past the rematch: that one was closed out
-		// when this match started, so logging it again would both double-count
-		// it and destroy the running match's clock. No real match ends this
-		// fast -- the shortest genuine one we have ever recorded was a
-		// mid-match disconnect at five seconds.
-		if (elapsed >= 3000) {
-			LogStat("match_end", {
-				{"seconds", (int)(elapsed / 1000)},
-				{"spectators", SpectatorCount()},
-				{"reported", true},
-			});
-			_matchStartMs = 0;
-		}
+		// Match IDs identify delayed results exactly, without a timing guess.
+		LogStat("match_end", {
+			{"seconds", (int)(elapsed / 1000)},
+			{"spectators", SpectatorCount()},
+			{"reported", true},
+			{"decisive", loserIndex >= 0},
+		});
+		_matchStartMs = 0;
 	}
 
 	// Winner stays as P1: the loser moves behind the other player, but
@@ -1060,6 +1111,7 @@ void SessionServer::HandleResults(int loserIndex) {
 		// anyone: a loser already in the last seat is reinserted where it was.
 		if (nPlayers == 2 && loserIndex == 0) {
 			std::swap(_matchData.chara[0], _matchData.chara[1]);
+			std::swap(_matchData.charaMemberId[0], _matchData.charaMemberId[1]);
 			std::swap(_charaOwner[0], _charaOwner[1]);
 		}
 	}
@@ -1074,4 +1126,6 @@ void SessionServer::HandleResults(int loserIndex) {
 	// order before its ready, so keeping the old values is always safe.
 	_matchData.readyMessageNum[0] = -1;
 	_matchData.readyMessageNum[1] = -1;
+	_matchData.inputDelay[0] = _matchData.inputDelay[1] = -1;
+	ResetBattleSync();
 }

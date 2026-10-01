@@ -1,6 +1,6 @@
 {
   "name": "sf4e",
-  "version-string": "0.5.5",
+  "version-string": "1.1.0",
   "$comment": "Most dependencies exist only for the Windows game-side build (injection, D3D9 overlay, GGPO, the launcher). The lobby server needs just three, so they are left unqualified and a Linux build pulls nothing else.",
   "dependencies": [
     {
@@ -51,6 +51,10 @@
     {
       "name": "valvefilevdf",
       "version>=": "1.0.0#1",
+      "platform": "windows"
+    },
+    {
+      "name": "zlib",
       "platform": "windows"
     }
   ],

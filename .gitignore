@@ -1,4 +1,9 @@
 /build
+/.tools/
+/vcpkg_installed/
+/out/
+__pycache__/
+*.pyc
 /msvc-build
 /.vs
 /.vscode
