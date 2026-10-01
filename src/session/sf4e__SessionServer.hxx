@@ -81,7 +81,9 @@ namespace sf4e {
 		// Every accepted connection and its IPv4, for the per-lobby and
 		// per-address caps.
 		std::map<HSteamNetConnection, uint32_t> _accepted;
-		void HandleResults(int loserSide);
+		void HandleResults(HSteamNetConnection reporter, const SessionProtocol::LobbyReportResults& result);
+		RoomScoreTracker _roomScores;
+		uint64_t _nextRoomMemberId = 0;
 
 		// Once both players have offered an endpoint, hand each of them the
 		// other's, with a shared token so the punch cannot be spoofed. Does
@@ -129,8 +131,9 @@ namespace sf4e {
 		// Drop the remembered character picks (and readiness) after any change to
 		// who is in the lobby. The picks are indexed by side, so a join or a
 		// leave can leave them describing the wrong player.
-		// Called whenever someone joins or leaves. Picks and readiness are NOT
-		// reset here -- DropCharaFromVacatedSeats() handles those by owner.
+		// Called whenever someone joins or leaves. Waiting players keep their
+		// readiness; an active match is cancelled if one of its players leaves.
+		// DropCharaFromVacatedSeats() handles remembered picks by owner.
 		void OnMembershipChanged();
 
 		SessionServer(

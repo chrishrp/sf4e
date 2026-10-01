@@ -2,6 +2,29 @@
 
 A process-inspection and modification tool for the Steam release of _Ultra Street Fighter 4_.
 
+## Arcade lobby fork
+
+This branch builds on [fabeloper/sf4e](https://github.com/fabeloper/sf4e) 1.0.2 with a
+portrait-based character select and room display. It includes all 44 AI-generated
+fighter portraits, named Ultra moves with directional inputs, a prominent shared
+stage, separate random fighter/Ultra/stage buttons, and room win/loss records that
+follow players through rematches and winner-stays seat changes.
+
+The lobby supports controllers, keyboard and mouse, and scales to the game window.
+Shared scores and live opponent selections require the **server from this fork**.
+Older servers show score availability explicitly. Both players must run the same
+Sidecar build. The existing release installation is separate from this source tree.
+
+See [building and testing the lobby](docs/ARCADE-LOBBY.md),
+[verified command data](docs/LOBBY_CATALOG.md),
+[room score behavior](docs/room-scores.md), and
+[new-character / ability modding feasibility](docs/MODDING-FEASIBILITY.md).
+
+Portrait provenance and the original generation prompt are in [assets/lobby](assets/lobby).
+Game simulation and the upstream engine-offset mirror are unchanged by the lobby UI.
+
+![Native lobby preview with demonstration players and scores](docs/images/arcade-lobby.png)
+
 ## About this fork
 
 This repository is a fork of [sf4e](https://codeberg.org/adanducci/sf4e), created and

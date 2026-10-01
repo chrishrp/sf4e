@@ -60,6 +60,8 @@ namespace sf4e {
 		}
 
 		void MatchData::Clear() {
+			matchId = 0;
+			charaMemberId[0] = charaMemberId[1] = 0;
 			inputDelay[0] = inputDelay[1] = -1;
 			readyMessageNum[0] = -1;
 			readyMessageNum[1] = -1;
