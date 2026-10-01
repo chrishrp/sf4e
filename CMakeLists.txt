@@ -2,9 +2,9 @@ cmake_minimum_required (VERSION 3.21)
 
 project (
     sf4e
-    VERSION 1.0.2
+    VERSION 1.1.0
     DESCRIPTION "A process-inspection and modification tool for the Steam release of Ultra Street Fighter 4."
-    HOMEPAGE_URL "https://gitlab.com/adanducci/sf4e"
+    HOMEPAGE_URL "https://github.com/chrishrp/sf4e"
 )
 
 set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -DDEBUG")

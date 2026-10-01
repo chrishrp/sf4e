@@ -1,15 +1,18 @@
-﻿# sf4e
+# sf4e
 
 A process-inspection and modification tool for the Steam release of _Ultra Street Fighter 4_.
 
 ## Arcade lobby fork
 
-This branch builds on [fabeloper/sf4e](https://github.com/fabeloper/sf4e) 1.0.2 with a
+This fork builds on [fabeloper/sf4e](https://github.com/fabeloper/sf4e) 1.0.2 with a
 portrait-based character select and room display. It loads official roster icons
 and player portraits for all 44 fighters from your installed game. Named Ultra
 moves with directional inputs, a prominent shared stage, separate random
 fighter/Ultra/stage buttons, and room win/loss records complete the room display.
 Room records follow players through rematches and winner-stays seat changes.
+
+[Download v1.1.0-rc.1](https://github.com/chrishrp/sf4e/releases/tag/v1.1.0-rc.1)
+(prerelease).
 
 The lobby supports controllers, keyboard and mouse, and scales to the game window.
 Shared scores and live opponent selections require the **server from this fork**.
@@ -84,13 +87,13 @@ result:
 
 ### Running on Windows
 
-Windows users with a working Steam installation can run sf4e by extracting a release then double-clicking on `Launcher.exe`. sf4e will attempt to detect your SF4 installation automatically. Windows users with uncommon or damaged Steam installations may run `Launcher.exe` with the `STEAM_APP_PATH` environment variable to the absolute path of the `Super Street Fighter IV - Arcade Edition` directory installed by Steam. You can navigate to this directory using the Steam library's context menu by right-clicking on Ultra Street Fighter IV's library entry, hovering over "Manage", then selecting "Browse local files", as shown below.
+Windows users with a working Steam installation can run sf4e by extracting a release then double-clicking on `SF4Enhanced.exe`. sf4e will attempt to detect your SF4 installation automatically. Windows users with uncommon or damaged Steam installations may run `SF4Enhanced.exe` with the `STEAM_APP_PATH` environment variable to the absolute path of the `Super Street Fighter IV - Arcade Edition` directory installed by Steam. You can navigate to this directory using the Steam library's context menu by right-clicking on Ultra Street Fighter IV's library entry, hovering over "Manage", then selecting "Browse local files", as shown below.
 
 ![The Steam right-click context menu, opened on the Ultra Street Fighter 4 library list entry](images/browse-local-files-context-menu.png)
 
 ### Running on Linux
 
-The most straighforward way to launch sf4e on Linux is with [protontricks](https://github.com/Matoking/protontricks). Extract the release, then run `protontricks-launch Launcher.exe` and select SF4 from the popup UI. For convenience, `protontricks-launch --appid 45760 Launcher.exe` can be used to launch sf4e non-interactively, ex. from shell scripts or program shortcuts.
+The most straighforward way to launch sf4e on Linux is with [protontricks](https://github.com/Matoking/protontricks). Extract the release, then run `protontricks-launch SF4Enhanced.exe` and select SF4 from the popup UI. For convenience, `protontricks-launch --appid 45760 SF4Enhanced.exe` can be used to launch sf4e non-interactively, ex. from shell scripts or program shortcuts.
 
 Linux users who do not install `protontricks` may set the `STEAM_APP_PATH` environment variable to the path of the the `Super Street Fighter IV - Arcade Edition` directory installed by Steam, as demonstrated above. Users should take care to ensure the variable points to a Windows-formatted path accessible from within the Proton container for SF4, and it may be helpful to take advantage of Wine providing the Linux system root as the `Z:` root inside Wine to specify the path. For example, if the local directory is available at `/home/steamdeck/.local/share/Steam/steamapps/common/Super Street Fighter IV - Arcade Edition`, the corresponding path through the Proton container would be `Z:\\home\\steamdeck\\.local\\share\\Steam\\steamapps\\common\\Super Street Fighter IV - Arcade Edition`.
 
@@ -129,9 +132,9 @@ To build sf4e with VS2019 16.10+:
      32-bit host to properly hook SF4's instructions.
 3. Open `CMakeLists.txt` with VS2019's native CMake integration.
    - Ensure [CMakePresets.json integration in Visual Studio](https://learn.microsoft.com/en-us/cpp/build/cmake-presets-vs?view=msvc-170#enable-cmakepresets-json-integration) is enabled.
-4. Run `Build All`. Confirm that `Launcher.exe` and `Sidecar.dll` are in
+4. Run `Build All`. Confirm that `SF4Enhanced.exe` and `Sidecar.dll` are in
    the build output.
-5. Run `Launcher.exe`.
+5. Run `SF4Enhanced.exe`.
 
 To build sf4e with the CMake command line:
 
@@ -145,11 +148,11 @@ To build sf4e with the CMake command line:
      provide tools like Ninja and Cmake, and have the various environment
      variables used by CMake already prepared.
 4. Build sf4e by running `cmake --build ./path-to-binary-dir/` from the root
-   of the repository. Confirm that `Launcher.exe` and `Sidecar.dll` are in
+   of the repository. Confirm that `SF4Enhanced.exe` and `Sidecar.dll` are in
    the build output.
    * If a `CMakeUserPresets.json` file like the one in step 2 is used, the
      the binary dir is `./msvc-build/default`.
-5. Run `Launcher.exe`.
+5. Run `SF4Enhanced.exe`.
 
 Builds generated with CMake that cannot take advantage of `vcpkg` will need to
 provide the following dependencies:

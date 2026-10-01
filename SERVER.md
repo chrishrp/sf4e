@@ -39,7 +39,7 @@ its own `ping` and nothing from outside is almost always this.
 
 ```
 sudo apt-get install -y git
-git clone --branch feature/arcade-lobby https://github.com/chrishrp/sf4e.git
+git clone https://github.com/chrishrp/sf4e.git
 cd sf4e
 deploy/build-linux.sh
 deploy/install-service-linux.sh Europe
@@ -115,7 +115,7 @@ echo -n '{"op":"ping"}' | nc -u -w2 198.51.100.7 23400
 ```
 
 A working server answers with something like
-`{"capacity":20,"lobbies":0,"ok":true,"version":"0.5.5"}`. If your own
+`{"capacity":20,"lobbies":0,"ok":true,"version":"1.1.0"}`. If your own
 machine answers but a remote one gets nothing, the provider firewall is the
 place to look.
 

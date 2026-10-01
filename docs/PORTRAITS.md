@@ -67,7 +67,7 @@ The loader checks patch roots before the DLC/base resources, in this order:
 `patch_ae2`. This lets the game's installed updates take priority.
 
 Use the portrait-parser tests for malformed data and bounds checks, then render
-against an owned installation to verify all 44 character IDs and crops. Test a
+against an owned installation to verify all 44 character IDs and crops. Test
 missing assets as well: the remaining lobby controls should still work and use
 the other original image or silhouette fallback. Do not add local game
 archives or extracted images to commits or release packages.

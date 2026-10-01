@@ -14,10 +14,10 @@ struct Player {
 struct Model {
     Player players[2];
     std::string code, watchers;
-    std::string spectatorStatus = "WAITING FOR THE PLAYERS TO READY UP";
+    std::string spectatorStatus = "Waiting for players";
     bool publicRoom = false, spectator = false, ready = false, scoresAvailable = false;
     int character = 0, ultra = 0, costume = 0, color = 0;
-    std::string edition = "ULTRA";
+    std::string edition = "Ultra";
     int editionId = 14;
     int stage = 0, proposedStage = 0, side = 0;
     int focusRow = 0, characterCursor = 0, optionCursor = 0, actionCursor = 0;

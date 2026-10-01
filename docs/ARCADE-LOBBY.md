@@ -35,6 +35,7 @@ See [official portrait loading](PORTRAITS.md) for details.
 Use the d-pad/arrows to move, A/Enter to select, and LB/RB (Page Up/Page Down) to
 change an option. Start/F1 readies the player. Mouse clicks select fighters,
 options, and actions. While ready, B/Escape cancels readiness before editing.
+The room keeps labels and status text minimal; controls are documented here.
 
 The action row has three independent random buttons: fighter, Ultra, and stage.
 Each click resolves immediately to a real selection; randomness is not evaluated
@@ -48,9 +49,9 @@ different proposal for when they become P1; the panel labels that proposal
 separately. Readying and immediate rematches preserve the inherited stage.
 
 Ultra I and II show their names and directional inputs, with orange/blue accents;
-Ultra Double uses purple. Charge, aerial, close-range and character-specific
-variants are included. The legend assumes the fighter faces right. See the
-catalog documentation for source evidence and edition differences.
+Ultra Double uses purple. Directions assume the fighter faces right. See the
+[command catalog](LOBBY_CATALOG.md) for notation, character-specific variants,
+source evidence and edition differences.
 Original SFIV exposes only Ultra I; Super and AE editions expose I/II. Ultra and
 Omega expose Double as well. Omega commands are labeled as unverified USFIV
 references, rather than presented as verified Omega inputs.

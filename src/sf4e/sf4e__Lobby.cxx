@@ -204,7 +204,7 @@ namespace {
 				ServerEntry e;
 				if (eq == std::string::npos) {
 					// A plain address, e.g. from server.txt: no name to show.
-					e.name = "SERVER";
+					e.name = "Server";
 					e.addr = item;
 				}
 				else {
@@ -607,8 +607,8 @@ namespace {
 		case rBattle::ED_SSF4: return "SSF4";
 		case rBattle::ED_AE2011: return "AE 2011";
 		case rBattle::ED_AE2012: return "AE 2012";
-		case rBattle::ED_USF4: return "ULTRA";
-		case rBattle::ED_OMEGA: return "OMEGA";
+		case rBattle::ED_USF4: return "Ultra";
+		case rBattle::ED_OMEGA: return "Omega";
 		default: return "?";
 		}
 	}
@@ -643,7 +643,7 @@ namespace {
 		sf4e::SessionClient& c = fUserApp::netplay->client;
         if (MySide() < 0) { Flash("Still connecting to the room"); return; }
         if (c._matchData.IsAllReady()) {
-            Flash("Waiting for the room to confirm the last result. Try READY again.");
+            Flash("Result pending. Try Ready again shortly.");
             return;
         }
         if (!g_stagePicked && sf4e::SessionProtocol::StageIDValid(c._matchData.stageID))
@@ -668,7 +668,7 @@ namespace {
 		if (MySide() == 0) {
             if (c.PreBattle_SetEnv(sf4e::localRand()) != k_EResultOK ||
                 c.PreBattle_SetStage(g_stage) != k_EResultOK) {
-                Flash("Could not send the stage. Try READY again."); return;
+                Flash("Could not send the stage. Try Ready again."); return;
             }
 		}
 		if (c.Lobby_Ready(g_delay) != k_EResultOK) { Flash("Could not ready up"); return; }
@@ -677,10 +677,8 @@ namespace {
 
 	// ---------------------------------------------------------------- screens
 	void DrawCapture(ImDrawList* dl, ImVec2 ds) {
-		DrawHeader(dl, ds, "ONLINE VERSUS", "sf4e rollback");
-		TextCentered(dl, g_fontHead, 44, ds.x * 0.5f, ds.y * 0.48f, "PRESS START", PAPER);
-		TextCentered(dl, g_fontBody, 24, ds.x * 0.5f, ds.y * 0.48f + 56, "on the controller you want to play with", PAPER_DIM, false);
-		DrawHint(dl, ds, "Keyboard: press Enter");
+		DrawHeader(dl, ds, "Online versus", nullptr);
+		TextCentered(dl, g_fontHead, 44, ds.x * 0.5f, ds.y * 0.48f, "Press Start or Enter", PAPER);
 
 		rPad* p = rPad::staticMethods.GetSingleton();
 		rPad::__publicMethods& m = rPad::publicMethods;
@@ -724,7 +722,7 @@ namespace {
 	void DrawSettingWarning(ImDrawList* dl, ImVec2 ds) {
 		if (!sf4e::Game::Battle::System::bFrameRateSettingWrong) return;
 		TextCentered(dl, g_fontBody, 24, ds.x * 0.5f, ds.y - 160,
-			"Set FRAMES PER SECOND to FIXED in the game's graphics options. Netplay runs smoother and stays in sync.", RED);
+			"Set 'Frames per second' to 'Fixed' in the game's graphics options.", RED);
 	}
 
 	void DrawHome(ImDrawList* dl, ImVec2 ds, const Input& in) {
@@ -739,9 +737,9 @@ namespace {
 			if (g_mm.state == sf4e::Matchmaker::State::Done) { g_serverStatus = 1; g_pingInFlight = false; g_mm.Cancel(); }
 			else if (g_mm.state == sf4e::Matchmaker::State::Failed) { g_serverStatus = 0; g_pingInFlight = false; g_mm.Cancel(); }
 		}
-		const char* sub = !g_mm.IsConfigured() ? "no server configured" :
-			g_serverStatus == 1 ? "SERVER ONLINE" : g_serverStatus == 0 ? "SERVER UNREACHABLE" : "checking the server...";
-		DrawHeader(dl, ds, "ONLINE VERSUS", nullptr);
+		const char* sub = !g_mm.IsConfigured() ? "No server configured" :
+			g_serverStatus == 1 ? "Server online" : g_serverStatus == 0 ? "Server unreachable" : "Checking the server...";
+		DrawHeader(dl, ds, "Online versus", nullptr);
 		ImU32 subCol = g_serverStatus == 1 ? GREEN : g_serverStatus == 0 ? RED : PAPER_DIM;
 		dl->AddText(g_fontBody, 26, ImVec2(64, 132), subCol, sub);
 		if (g_serverStatus == 1 && g_mm.capacity > 0) {
@@ -756,33 +754,33 @@ namespace {
 		bool updateAvailable = g_serverStatus == 1 && VersionNewer(g_mm.serverVersion, SF4E_VERSION);
 		if (updateAvailable) {
 			char msg[112];
-			snprintf(msg, sizeof(msg), "UPDATE AVAILABLE   v%s   (you have v%s)   -   press Y to download",
+			snprintf(msg, sizeof(msg), "Update available: v%s   (installed: v%s)   Y: Download",
 				g_mm.serverVersion.c_str(), SF4E_VERSION);
 			Slant(dl, ImVec2(40, 168), ImVec2(ds.x - 40, 210), GOLD, 8);
 			dl->AddText(g_fontBody, 24, ImVec2(66, 176), INK, msg);
 			if (in.alt) {
-				ShellExecuteA(NULL, "open", "https://github.com/fabeloper/sf4enhanced/releases/latest", NULL, NULL, SW_SHOWNORMAL);
-				Flash("Opening the download page in your browser", true);
+				ShellExecuteA(NULL, "open", "https://github.com/chrishrp/sf4e/releases", NULL, NULL, SW_SHOWNORMAL);
+				Flash("Opening downloads", true);
 			}
 		}
 
 		char delayLabel[32];
-		snprintf(delayLabel, sizeof(delayLabel), "INPUT DELAY   <  %d  >", g_delay);
+		snprintf(delayLabel, sizeof(delayLabel), "Input delay   <  %d  >", g_delay);
 		char serverLabel[64];
 		if (g_servers.size() > 1) {
-			snprintf(serverLabel, sizeof(serverLabel), "SERVER   <  %s  >", g_servers[g_serverIdx].name.c_str());
+			snprintf(serverLabel, sizeof(serverLabel), "Server   <  %s  >", g_servers[g_serverIdx].name.c_str());
 		}
 		else if (g_servers.size() == 1) {
-			snprintf(serverLabel, sizeof(serverLabel), "SERVER      %s", g_servers[0].name.c_str());
+			snprintf(serverLabel, sizeof(serverLabel), "Server      %s", g_servers[0].name.c_str());
 		}
 		else {
-			snprintf(serverLabel, sizeof(serverLabel), "SERVER      none");
+			snprintf(serverLabel, sizeof(serverLabel), "Server      none");
 		}
 		char connLabel[64];
-		snprintf(connLabel, sizeof(connLabel), "CONNECTION   <  %s  >", g_directOptIn ? "PEER TO PEER" : "SERVER RELAY");
+		snprintf(connLabel, sizeof(connLabel), "Connection   <  %s  >", g_directOptIn ? "Peer to peer" : "Server relay");
 		char createLabel[48];
-		snprintf(createLabel, sizeof(createLabel), "CREATE LOBBY   <  %s  >", g_public ? "PUBLIC" : "PRIVATE");
-		const char* items[HOME_ITEMS] = { createLabel, "BROWSE PUBLIC LOBBIES", "JOIN WITH CODE", serverLabel, delayLabel, connLabel, "BACK TO GAME" };
+		snprintf(createLabel, sizeof(createLabel), "Create lobby   <  %s  >", g_public ? "Public" : "Private");
+		const char* items[HOME_ITEMS] = { createLabel, "Browse public lobbies", "Join with code", serverLabel, delayLabel, connLabel, "Back to game" };
 		float y = ds.y * 0.36f;
 		for (int i = 0; i < HOME_ITEMS; i++) {
 			bool sel = i == g_homeCursor;
@@ -795,19 +793,11 @@ namespace {
 			}
 			y += 74;
 		}
-		// Both players must pick the same one, or their codes will not be found.
-		if (g_servers.size() > 1) {
-			dl->AddText(g_fontSmall, 20, ImVec2(80, y - 16), PAPER_DIM,
-				"Both players must choose the SAME server.");
-		}
-		dl->AddText(g_fontSmall, 20, ImVec2(80, y + 10), PAPER_DIM, ("Playing as " + std::string(g_name)).c_str());
-		DrawHint(dl, ds, "Up/Down: choose     A: confirm     Left/Right: change server | delay | connection     B: back to game");
 
 		if (in.up) g_homeCursor = (g_homeCursor + HOME_ITEMS - 1) % HOME_ITEMS;
 		if (in.down) g_homeCursor = (g_homeCursor + 1) % HOME_ITEMS;
 		if (g_homeCursor == 0 && (in.left || in.right)) {
 			g_public = !g_public;
-			Flash(g_public ? "Public: anyone can see and join this lobby from the list" : "Private: only someone with the code can join", true);
 			SaveSettings();
 		}
 		// Row 2 switches server, row 3 the input delay.
@@ -838,9 +828,6 @@ namespace {
 			if (!g_directOptIn && fUserApp::netplay) {
 				fUserApp::netplay->client.DisableDirect();
 			}
-			Flash(g_directOptIn
-				? "Peer to peer: lower ping. Your opponent sees your IP address and the game port is opened on your router"
-				: "Server relay: all traffic goes through the server; your IP address stays private", true);
 			SaveSettings();
 		}
 		if (in.back) { sf4e::Lobby::Close(); return; }
@@ -874,7 +861,7 @@ namespace {
 	}
 
 	void DrawJoin(ImDrawList* dl, ImVec2 ds, const Input& in) {
-		DrawHeader(dl, ds, "JOIN", "type the code your opponent gave you");
+		DrawHeader(dl, ds, "Join with code", nullptr);
 		ReadTypedCode();
 
 		// The code so far, as six slots.
@@ -892,7 +879,7 @@ namespace {
 		float gridW = JOIN_COLS * cell + (JOIN_COLS - 1) * cg;
 		float gx0 = ds.x * 0.5f - gridW * 0.5f, gy0 = ds.y * 0.46f;
 		int charRows = (CODE_CHAR_COUNT + JOIN_COLS - 1) / JOIN_COLS;
-		const char* extras[JOIN_EXTRA] = { "DEL", "JOIN", "WATCH" };
+		const char* extras[JOIN_EXTRA] = { "Delete", "Join", "Watch" };
 		for (int i = 0; i < total_items; i++) {
 			bool sel = i == g_joinCursor;
 			ImVec2 a, b;
@@ -912,7 +899,6 @@ namespace {
 			dl->AddRectFilled(a, b, sel ? RED : CARD); dl->AddRect(a, b, sel ? PAPER : CARD_EDGE, 0, 0, 2);
 			TextCentered(dl, g_fontHead, 34, (a.x + b.x) * 0.5f, a.y + 10, label, PAPER, false);
 		}
-		DrawHint(dl, ds, "Move: pick a letter     A: add     B / Backspace: delete     Y / Ctrl+V: paste     Start: join     WATCH: spectate the match");
 
 		if (in.left) g_joinCursor = (g_joinCursor + total_items - 1) % total_items;
 		if (in.right) g_joinCursor = (g_joinCursor + 1) % total_items;
@@ -946,13 +932,13 @@ namespace {
 		int online = 0, looking = 0;
 		for (auto& m : g_browseMm) { online += m->playersOnline; looking += m->browsing; }
 		char sub[96];
-		snprintf(sub, sizeof(sub), "every region   %d playing, %d looking right now", online, looking);
-		DrawHeader(dl, ds, "PUBLIC LOBBIES", sub);
+		snprintf(sub, sizeof(sub), "%d playing, %d looking", online, looking);
+		DrawHeader(dl, ds, "Public lobbies", sub);
 		{
 			char fresh[64];
-			if (g_listInFlight) snprintf(fresh, sizeof(fresh), "refreshing...");
+			if (g_listInFlight) snprintf(fresh, sizeof(fresh), "Refreshing...");
 			else if (g_lastListAt == 0) snprintf(fresh, sizeof(fresh), "");
-			else snprintf(fresh, sizeof(fresh), "live - refreshed %ds ago", (int)((GetTickCount64() - g_lastListAt) / 1000));
+			else snprintf(fresh, sizeof(fresh), "Refreshed %ds ago", (int)((GetTickCount64() - g_lastListAt) / 1000));
 			dl->AddText(g_fontSmall, 20, ImVec2(ds.x - 60 - TextSize(g_fontSmall, 20, fresh).x, 136), PAPER_DIM, fresh);
 		}
 		if (g_browseMm.size() != g_servers.size()) {
@@ -994,8 +980,6 @@ namespace {
 		if (g_browse.empty()) {
 			TextCentered(dl, g_fontHead, 34, ds.x * 0.5f, ds.y * 0.46f,
 				(g_lastListAt == 0 || g_listInFlight) ? "Looking for lobbies..." : "No public lobbies right now", PAPER_DIM);
-			TextCentered(dl, g_fontBody, 24, ds.x * 0.5f, ds.y * 0.46f + 50,
-				"Create one and it will appear here for everyone, in every region.", PAPER_DIM, false);
 		}
 		for (int i = 0; i < (int)g_browse.size(); i++) {
 			const auto& e = g_browse[i];
@@ -1006,11 +990,10 @@ namespace {
 			TextOutlined(dl, g_fontHead, 36, ImVec2(80 + 38 + 18, y), e.title.c_str(), sel ? PAPER : PAPER_DIM);
 			char meta[112];
 			snprintf(meta, sizeof(meta), "%s     %s     %d / 2 players     %d watching     open %d min",
-				region.c_str(), e.full ? "IN MATCH" : "WAITING", e.players, e.spectators, e.age / 60);
+				region.c_str(), e.full ? "In match" : "Waiting", e.players, e.spectators, e.age / 60);
 			dl->AddText(g_fontSmall, 20, ImVec2(ds.x - 60 - TextSize(g_fontSmall, 20, meta).x, y + 12), sel ? PAPER : PAPER_DIM, meta);
 			y += 66;
 		}
-		DrawHint(dl, ds, "Up/Down: choose     A: join (open seat)     Y: watch     RB: refresh now     B: back");
 		if (in.rb && !g_listInFlight) g_lastListAt = 0;
 		int n = (int)g_browse.size();
 		if (n > 0) {
@@ -1044,7 +1027,7 @@ namespace {
 	}
 
 	void DrawConnecting(ImDrawList* dl, ImVec2 ds, const Input& in) {
-		DrawHeader(dl, ds, g_isCreator ? "CREATING LOBBY" : (g_spectate ? "JOINING AS SPECTATOR" : "JOINING"), nullptr);
+		DrawHeader(dl, ds, g_isCreator ? "Creating lobby" : (g_spectate ? "Joining as spectator" : "Joining"), nullptr);
 		g_mm.Poll();
 		if (g_mm.state == sf4e::Matchmaker::State::Waiting) {
 			int dots = (int)(GetTickCount64() / 400 % 4);
@@ -1053,9 +1036,9 @@ namespace {
 			if (in.back) { g_mm.Cancel(); g_screen = SC_HOME; }
 		}
 		else if (g_mm.state == sf4e::Matchmaker::State::Failed) {
-			TextCentered(dl, g_fontHead, 36, ds.x * 0.5f, ds.y * 0.44f, "COULD NOT CONNECT", RED);
+			TextCentered(dl, g_fontHead, 36, ds.x * 0.5f, ds.y * 0.44f, "Could not connect", RED);
 			TextCentered(dl, g_fontBody, 24, ds.x * 0.5f, ds.y * 0.44f + 54, g_mm.error.c_str(), PAPER_DIM, false);
-			DrawHint(dl, ds, "B: back");
+			DrawHint(dl, ds, "B: Back");
 			if (in.back || in.confirm) g_screen = g_isCreator ? SC_HOME : (g_fromBrowse ? SC_BROWSE : SC_JOIN);
 		}
 		else if (g_mm.state == sf4e::Matchmaker::State::Done) {
@@ -1089,18 +1072,18 @@ namespace {
 	void DrawResult(ImDrawList* dl, ImVec2 ds, const Input& in) {
 		bool draw = g_resultWinner < 0;
 		bool won = !draw && g_resultWinner == g_mySideAtResult;
-		DrawHeader(dl, ds, "MATCH OVER", nullptr);
+		DrawHeader(dl, ds, "Match over", nullptr);
 		DrawSettingWarning(dl, ds);
 		if (!g_spectate && fUserApp::netplay) KeepDirectAlive(fUserApp::netplay->client);
 
 		char who[64];
 		const char* verdict;
 		if (g_spectate) {
-			snprintf(who, sizeof(who), "%s WINS", g_resultWinner == 0 ? "P1" : "P2");
-			verdict = draw ? "DRAW" : who;
+			snprintf(who, sizeof(who), "%s wins", g_resultWinner == 0 ? "P1" : "P2");
+			verdict = draw ? "Draw" : who;
 		}
 		else {
-			verdict = draw ? "DRAW" : (won ? "YOU WIN" : "YOU LOSE");
+			verdict = draw ? "Draw" : (won ? "You win" : "You lose");
 		}
 		TextCentered(dl, g_fontTitle, 120, ds.x * 0.5f, ds.y * 0.24f, verdict, draw ? PAPER : ((won || g_spectate) ? GOLD : RED));
 
@@ -1113,14 +1096,14 @@ namespace {
             const auto* me = Me();
             char tally[128];
             if (!g_spectate && me) {
-                snprintf(tally, sizeof(tally), "ROOM RECORD   %llu W  /  %llu L",
+                snprintf(tally, sizeof(tally), "Room record   %llu W  /  %llu L",
                     (unsigned long long)me->roomScore.wins, (unsigned long long)me->roomScore.losses);
                 TextCentered(dl, g_fontBody, 22, ds.x * .5f, ds.y * .24f + 176, tally, GOLD, false);
             }
         }
 
-		const char* playerItems[3] = { "REMATCH", "CHANGE CHARACTER", "LEAVE LOBBY" };
-		const char* watcherItems[2] = { "KEEP WATCHING", "LEAVE LOBBY" };
+		const char* playerItems[3] = { "Rematch", "Change character", "Leave lobby" };
+		const char* watcherItems[2] = { "Keep watching", "Leave lobby" };
 		int n = g_spectate ? 2 : 3;
 		const char** items = g_spectate ? watcherItems : playerItems;
 		float y = ds.y * 0.56f;
@@ -1132,7 +1115,6 @@ namespace {
 			TextOutlined(dl, g_fontHead, 40, ImVec2(x, y), items[i], sel ? PAPER : PAPER_DIM);
 			y += 72;
 		}
-		DrawHint(dl, ds, g_spectate ? "Up/Down: choose     A: confirm" : "Up/Down: choose     A: confirm     Start: rematch with the same character");
 
 		if (!fUserApp::netplay) {
 			TextCentered(dl, g_fontBody, 22, ds.x * 0.5f, ds.y * 0.50f, g_spectate ? "The lobby closed" : "Your opponent left", RED, false);
@@ -1222,7 +1204,7 @@ namespace {
         m.proposedStage = g_stage;
         m.focusRow = g_lobbyRow; m.characterCursor = g_charaCursor;
         m.optionCursor = g_optionCursor; m.actionCursor = g_actionCursor;
-        if (m.spectator) { m.character = -1; m.ultra = 0; m.edition = "ULTRA"; m.editionId = rBattle::ED_USF4; }
+        if (m.spectator) { m.character = -1; m.ultra = 0; m.edition = "Ultra"; m.editionId = rBattle::ED_USF4; }
         for (int i = 0; i < 2; ++i) {
             auto pm = PlayerAt(i); auto& p = m.players[i];
             if (!pm) continue;
@@ -1243,10 +1225,10 @@ namespace {
         if (m.spectator) {
             const auto* me = Me();
             if (!m.players[0].present || !m.players[1].present)
-                m.spectatorStatus = "WAITING FOR TWO PLAYERS";
+                m.spectatorStatus = "Waiting for players";
             else if (c._matchData.IsAllReady())
-                m.spectatorStatus = me && me->watching ? "THE MATCH IS STARTING" :
-                    "MATCH IN PROGRESS / YOU WILL WATCH THE NEXT ONE";
+                m.spectatorStatus = me && me->watching ? "Match starting" :
+                    "Watching next match";
         }
         sf4e::LobbyView::Fonts fonts = {g_fontTitle, g_fontHead, g_fontBody, g_fontSmall};
         return sf4e::LobbyView::Draw(dl, fonts, m, g_canvasMouse,
@@ -1263,9 +1245,9 @@ namespace {
 
 	void DrawLobby(ImDrawList* dl, ImVec2 ds, const Input& in) {
 		if (!fUserApp::netplay) {
-			DrawHeader(dl, ds, "LOBBY", nullptr);
+			DrawHeader(dl, ds, "Lobby", nullptr);
 			TextCentered(dl, g_fontHead, 34, ds.x * 0.5f, ds.y * 0.48f, "Connection lost", RED);
-			DrawHint(dl, ds, "B: back");
+			DrawHint(dl, ds, "B: Back");
 			if (in.back || in.confirm) g_screen = SC_HOME;
 			return;
 		}
@@ -1322,7 +1304,7 @@ namespace {
 			if (in.back) {
                 if (c.Lobby_Unready() != k_EResultOK) { Flash("Could not cancel ready"); return; }
 				g_sentReady = false;
-				Flash("Not ready. Change what you like, then READY again.", true);
+				Flash("Ready cancelled", true);
 			}
 			return;
 		}
@@ -1586,7 +1568,6 @@ void sf4e::Lobby::Draw() {
 	case SC_RESULT: DrawResult(dl, ds, in); break;
 	}
 	DrawError(dl, ds);
-	dl->AddText(g_fontSmall, 16, ImVec2(ds.x - 200, 8), IM_COL32(255, 255, 255, 90), "sf4e / arcade lobby");
 	for (int i = firstVertex; i < dl->VtxBuffer.Size; ++i) {
         auto& p = dl->VtxBuffer[i].pos; p = ImVec2(p.x * scale + offset.x, p.y * scale + offset.y);
     }

@@ -226,8 +226,8 @@ sf4e::LobbyView::Model DemoModel(const Options& options) {
     case 1: model.edition = "SSF4"; break;
     case 2: model.edition = "AE 2011"; break;
     case 4: model.edition = "AE 2012"; break;
-    case 16: model.edition = "OMEGA"; break;
-    default: model.edition = "ULTRA"; break;
+    case 16: model.edition = "Omega"; break;
+    default: model.edition = "Ultra"; break;
     }
     model.stage = model.proposedStage = options.stage;
     model.focusRow = options.focusRow;
