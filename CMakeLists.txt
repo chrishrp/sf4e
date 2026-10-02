@@ -2,7 +2,7 @@ cmake_minimum_required (VERSION 3.21)
 
 project (
     sf4e
-    VERSION 1.1.0
+    VERSION 1.2.0
     DESCRIPTION "A process-inspection and modification tool for the Steam release of Ultra Street Fighter 4."
     HOMEPAGE_URL "https://github.com/chrishrp/sf4e"
 )
@@ -29,6 +29,7 @@ if(WIN32)
     find_library(LIB_DETOURS "detours")
     find_package(CLI11 CONFIG REQUIRED)
     find_package(ggpo CONFIG REQUIRED)
+    find_path(GGPO_INCLUDE_DIR ggponet.h REQUIRED)
     find_package(imgui CONFIG REQUIRED)
     find_package(protobuf CONFIG REQUIRED)
     find_package(ZLIB REQUIRED)
@@ -173,13 +174,47 @@ if(BUILD_TESTING)
     add_test(NAME LobbyCatalog COMMAND LobbyCatalogTest)
     add_executable(RoomScoreTest tests/room_score_test.cxx)
     add_test(NAME RoomScore COMMAND RoomScoreTest)
+    add_executable(InstantRematchTest tests/instant_rematch_test.cxx)
+    add_test(NAME InstantRematch COMMAND InstantRematchTest)
+    add_executable(MementoKeyLifecycleTest tests/memento_key_lifecycle_test.cxx)
+    add_test(NAME MementoKeyLifecycle COMMAND MementoKeyLifecycleTest)
+    add_executable(InstantRematchServerTest tests/instant_rematch_server_test.cxx)
+    target_link_libraries(InstantRematchServerTest PRIVATE Session)
+    if(WIN32)
+        target_link_libraries(InstantRematchServerTest PRIVATE ws2_32)
+    endif()
+    add_test(NAME InstantRematchServer COMMAND InstantRematchServerTest)
+    set_tests_properties(InstantRematchServer PROPERTIES TIMEOUT 30)
+    add_executable(MatchOutcomeTest tests/match_outcome_test.cxx)
+    add_test(NAME MatchOutcome COMMAND MatchOutcomeTest)
     add_executable(RoomProtocolTest tests/room_protocol_test.cxx)
     target_link_libraries(RoomProtocolTest PRIVATE Session)
     add_test(NAME RoomProtocol COMMAND RoomProtocolTest)
     if(WIN32)
+        add_executable(GgpoRematchTest tests/ggpo_rematch_test.cxx)
+        target_include_directories(GgpoRematchTest PRIVATE ${GGPO_INCLUDE_DIR})
+        target_link_libraries(GgpoRematchTest PRIVATE ggpo::GGPO)
+        add_test(NAME GgpoRematch COMMAND GgpoRematchTest)
+        set_tests_properties(GgpoRematch PROPERTIES TIMEOUT 35)
+        add_executable(NetplayStartupTest tests/netplay_startup_test.cxx)
+        target_include_directories(NetplayStartupTest PRIVATE ${GGPO_INCLUDE_DIR})
+        target_link_libraries(NetplayStartupTest PRIVATE ggpo::GGPO ws2_32)
+        add_test(NAME NetplayStartup COMMAND NetplayStartupTest)
+        set_tests_properties(NetplayStartup PROPERTIES TIMEOUT 10)
+        add_executable(HolePunchTest tests/hole_punch_test.cxx src/session/sf4e__HolePunch.cxx)
+        target_link_libraries(HolePunchTest PRIVATE nlohmann_json::nlohmann_json spdlog::spdlog ws2_32)
+        add_test(NAME HolePunch COMMAND HolePunchTest)
+        set_tests_properties(HolePunch PROPERTIES TIMEOUT 15)
         add_executable(PortraitArchiveTest tests/portrait_archive_test.cxx)
         target_link_libraries(PortraitArchiveTest PRIVATE PortraitArchive)
         add_test(NAME PortraitArchive COMMAND PortraitArchiveTest)
+        find_program(SF4E_POWERSHELL NAMES powershell)
+        if(SF4E_POWERSHELL)
+            add_test(NAME HostLauncher COMMAND "${SF4E_POWERSHELL}"
+                -NoLogo -NoProfile -ExecutionPolicy Bypass
+                -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/host_launcher_test.ps1")
+            set_tests_properties(HostLauncher PROPERTIES TIMEOUT 30)
+        endif()
     endif()
 endif()
 if(WIN32)
@@ -210,10 +245,12 @@ if(WIN32)
 # deploy/pack-all.cmd reads deploy/server.private (gitignored) and passes it
 # here. Empty means no default; server.txt or --server then has to supply it.
 set(SF4E_BAKED_SERVER "" CACHE STRING "Lobby server (host[:port]) baked into the launcher")
+option(SF4E_DEFAULT_INSTANT_REMATCH "Enable experimental instant rematches when double-clicking the preview launcher" OFF)
 set(SF4E_BAKED_OUT "${CMAKE_BINARY_DIR}/generated/baked_server.h")
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/bake-server.cmake")
 
 add_executable(Launcher WIN32 src/launcher/launcher.cxx src/launcher/app.rc)
+target_compile_definitions(Launcher PRIVATE SF4E_DEFAULT_INSTANT_REMATCH=$<BOOL:${SF4E_DEFAULT_INSTANT_REMATCH}>)
 set_target_properties(Launcher PROPERTIES OUTPUT_NAME "SF4Enhanced")
 target_include_directories(Launcher PRIVATE ${VALVEFILEVDF_INCLUDE_DIRS} "${CMAKE_BINARY_DIR}/generated")
 target_link_libraries(Launcher PRIVATE ${LIB_DETOURS} CLI11::CLI11 spdlog::spdlog "shlwapi" "pathcch")
@@ -256,8 +293,12 @@ install(
   FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/INSTALL.md"
     "${CMAKE_CURRENT_SOURCE_DIR}/SERVER.md"
-    "${CMAKE_CURRENT_SOURCE_DIR}/server.txt"
     "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Try-Instant-Rematch.cmd"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Host-Rematch-Test.cmd"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Host-Rematch-Test.ps1"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Stop-Rematch-Test.cmd"
+    "${CMAKE_CURRENT_SOURCE_DIR}/INSTANT-REMATCH-TEST.md"
   DESTINATION "."
 )
 
@@ -267,6 +308,7 @@ install(FILES
   "${CMAKE_CURRENT_SOURCE_DIR}/docs/MODDING-FEASIBILITY.md"
   "${CMAKE_CURRENT_SOURCE_DIR}/docs/LOBBY_CATALOG.md"
   "${CMAKE_CURRENT_SOURCE_DIR}/docs/PORTRAITS.md"
+  "${CMAKE_CURRENT_SOURCE_DIR}/docs/INSTANT-REMATCH.md"
   DESTINATION "docs"
 )
 

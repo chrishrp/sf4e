@@ -18,14 +18,17 @@ rollback netcode while it runs, so you can remove it by deleting this folder.
    later. It is safe: it only clears the "downloaded from the internet" mark.
 2. Extract this whole folder anywhere you like. The Desktop is fine. Do **not**
    copy the files into the Street Fighter folder.
-3. Set `server.txt` to the address of a server running this fork's `LobbyServer`.
-   The included template has no active address. See `SERVER.md` to host the
-   server, and `docs/ARCADE-LOBBY.md` for this fork's features and test limits.
-4. Double-click `SF4Enhanced.exe`.
+3. Double-click `SF4Enhanced.exe`. Packages with built-in servers connect
+   automatically; no `server.txt` is needed. Check `BUILD-INFO.txt`, if included,
+   for the package's connection settings.
 
 It finds your Steam copy of the game by itself and starts it. Both players and
-spectators need matching fork binaries and the same server address. This
-development package does not include a hosted public server.
+spectators need matching fork binaries and the same server selected in the
+lobby. Existing public servers support ordinary play; the new shared room
+scores and experimental instant rematches require this fork's updated server.
+If a development package has no built-in address, `server.txt` or `--server`
+can supply one. See `SERVER.md` for hosting and `docs/ARCADE-LOBBY.md` for test
+limits.
 
 The lobby reads official character portraits automatically from your installed
 game. No portrait extraction step or Python installation is needed, and the game

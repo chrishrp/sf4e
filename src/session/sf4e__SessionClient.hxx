@@ -2,6 +2,7 @@
 
 #include <string>
 #include <vector>
+#include <deque>
 
 #include <nlohmann/json.hpp>
 #include <GameNetworkingSockets/steam/steamnetworkingsockets.h>
@@ -80,7 +81,17 @@ namespace sf4e {
 		// Snapshots from all-ready; current lobby seats may already have
 		// rotated by the time the game finishes showing its result.
 		int ActiveMatchSide() const { return _activeMatchSide; }
+		uint64_t ActiveMatchId() const { return _activeMatchId; }
 		int ActiveMatchCharacter(int side) const { return side >= 0 && side < 2 ? _activeMatchChara[side] : -1; }
+
+		// Call only after the engine has confirmed the final simulated frame.
+		// A player requests after choosing Rematch; a watching spectator sends
+		// its readiness automatically. Prepare/Start/Abort are processed by the
+		// engine at a safe point, never inside the networking callback.
+		EResult RequestInstantRematch(int resultFrame, int loserSide);
+		EResult AcknowledgeInstantRematch();
+		EResult CancelInstantRematch(bool restartPending = false);
+		bool TakeInstantRematchEvent(SessionProtocol::InstantRematchEvent& event);
 
 		EResult PreBattle_SetEnv(uint32_t rngSeed);
 		EResult PreBattle_SetChara(const Dimps::GameEvents::VsMode::ConfirmedCharaConditions& chara);
@@ -149,6 +160,12 @@ namespace sf4e {
 		int _activeMatchSide = -1;
 		int _activeMatchChara[2] = { -1, -1 };
 		bool _activeMatchReported = false;
+		// 0 untouched, 1 requested, 2 prepare received, 3 acknowledged,
+		// 4 start queued, 5 aborted. Cleared only for a new match epoch.
+		int _instantRematchPhase = 0;
+		int _instantRematchResultFrame = -1;
+		int _instantRematchLoserSide = -2;
+		std::deque<SessionProtocol::InstantRematchEvent> _instantRematchEvents;
 
 		// Opt-in direct play; see EnableDirect().
 		HolePunch _punch;

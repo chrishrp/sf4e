@@ -367,9 +367,14 @@ int WINAPI wWinMain(
 
 	sf4e::Args args;
 	std::string serverOption;
+	bool enableInstantRematch = false;
+	bool disableInstantRematch = false;
 	CLI::App app("A process-inspection and modification tool for the Steam release of Ultra Street Fighter 4.", "sf4e");
 	app.add_flag("--console", args.bShowConsole, "Show a console with live logging. The console may interfere with inputs to the main window.");
 	app.add_option("--server", serverOption, "Lobby server, as host or host:port. Overrides server.txt next to the launcher.");
+	auto* enableRematchOption = app.add_flag("--instant-rematch", enableInstantRematch, "Enable experimental instant rematches for this launch.");
+	auto* disableRematchOption = app.add_flag("--no-instant-rematch", disableInstantRematch, "Use ordinary lobby rematches for this launch.");
+	enableRematchOption->excludes(disableRematchOption);
 	int argc;
 	LPWSTR* argv = CommandLineToArgvW(
 		// Intentionally do _not_ use lpCmdLine here. Windows removes
@@ -386,6 +391,15 @@ int WINAPI wWinMain(
 		&argc
 	);
 	CLI11_PARSE(app, argc, argv);
+	// Preview packages can enable the experiment on double-click. Explicit
+	// command-line options win over the inherited environment; otherwise keep
+	// any existing environment override, including SF4E_INSTANT_REMATCH=0.
+	if (enableInstantRematch || disableInstantRematch) {
+		SetEnvironmentVariableW(L"SF4E_INSTANT_REMATCH", enableInstantRematch ? L"1" : L"0");
+	}
+	else if (SF4E_DEFAULT_INSTANT_REMATCH && GetEnvironmentVariableW(L"SF4E_INSTANT_REMATCH", nullptr, 0) == 0) {
+		SetEnvironmentVariableW(L"SF4E_INSTANT_REMATCH", L"1");
+	}
 
 	// Compute the path to the sidecar DLL based on the launcher's directory.
 	// Ideally, this wouldn't have to convert from wide-char to multibyte in

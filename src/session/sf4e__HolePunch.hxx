@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include <winsock2.h>
 
@@ -26,6 +27,7 @@ namespace sf4e {
 		// Binds `localPort`. False if the port is taken (then we just relay).
 		bool Open(uint16_t localPort);
 		bool IsOpen() const { return _sock != INVALID_SOCKET; }
+		uint16_t BoundPort() const { return _boundPort; }
 		void Close();
 
 		// Asks the server's matchmaker port what address this socket appears
@@ -77,11 +79,14 @@ namespace sf4e {
 
 	private:
 		bool QueryMapping(const sockaddr_in& addr, int timeoutMs, std::string& outIp, uint16_t& outPort);
+		bool IsSelfEndpoint(const sockaddr_in& addr) const;
+		void ReadLocalAddresses();
 		// The relay port speaks a nine-byte probe rather than the matchmaker's
 		// JSON; the reply is the same either way.
 		bool _probeAsRelay = false;
 
 		SOCKET _sock = INVALID_SOCKET;
 		uint16_t _boundPort = 0;
+		std::vector<uint32_t> _localAddresses;
 	};
 }

@@ -33,17 +33,20 @@
 #include "../Dimps/Dimps__Platform.hxx"
 
 #include "../session/sf4e__SessionProtocol.hxx"
+#include "../session/sf4e__MatchOutcome.hxx"
 
 #include "sf4e.hxx"
 #include "sf4e__Game.hxx"
 #include "sf4e__GameEvents.hxx"
 #include "sf4e__Lobby.hxx"
+#include "sf4e__NetplayStartup.hxx"
 #include "sf4e__Game__Battle.hxx"
 #include "sf4e__Game__Battle__Hud.hxx"
 #include "sf4e__Game__Battle__System.hxx"
 #include "sf4e__Pad.hxx"
 #include "sf4e__Platform.hxx"
 #include "sf4e__Rtti.hxx"
+#include "sf4e__UserApp.hxx"
 
 using Dimps::Platform::WithReleaser;
 
@@ -72,6 +75,92 @@ namespace fHud = sf4e::Game::Battle::Hud;
 using fSoundPlayerManager = sf4e::Game::Battle::Sound::SoundPlayerManager;
 using fSystem = sf4e::Game::Battle::System;
 using fVsBattle = sf4e::GameEvents::VsBattle;
+
+namespace {
+    // This snapshot belongs to the loaded battle, not GGPO's short rolling pool.
+    // Retire it BEFORE any of its owners is released; never transmit pointers.
+    struct InstantRematchState {
+        fSystem::SaveState baseline;
+        StateSnapshot baselineProbe = {};
+        bool enabled = false;
+        bool captured = false;
+        bool restoring = false;
+        bool preparing = false;
+        bool starting = false;
+        bool confirmed = false;
+        bool voted = false;
+        bool readySent = false;
+        bool invalidated = false;
+        bool loading = false;
+        bool baselineUnsafeToFree = false;
+        int winner = -1;
+        int frame = 0;
+        int resultFrame = -1;
+        ULONGLONG heldSince = 0;
+        ULONGLONG startSince = 0;
+        std::string status;
+    } g_instant;
+
+    bool IsInstantResultFlow() {
+        DWORD flow = *rSystem::staticVars.CurrentBattleFlow;
+        return flow == rSystem::BF__MATCH_RESULT || flow == rSystem::BF__MATCH_OVER;
+    }
+
+    bool HoldInstantResult() {
+        return g_instant.enabled && IsInstantResultFlow();
+    }
+
+    int SnapshotWinner(const StateSnapshot& state) {
+        const auto raw = [](const FixedPoint& value) {
+            return int32_t(value.integral) * 65536 + value.fractional;
+        };
+        return sf4e::MatchOutcome::WinnerFromVitality(
+            raw(state.chara[0].vit), raw(state.chara[0].vitmax),
+            raw(state.chara[1].vit), raw(state.chara[1].vitmax));
+    }
+
+    void ReleaseInstantBaseline() {
+        if (g_instant.baseline.used) {
+            bool live = !g_instant.baselineUnsafeToFree;
+            for (const auto& entry : g_instant.baseline.keys)
+                if (fKey::trackedKeys.count(entry.first) == 0) live = false;
+            if (live) fSystem::SaveState::Free(&g_instant.baseline);
+            else fSystem::SaveState::Reclaim(&g_instant.baseline, "instant_owner_missing", -1);
+        }
+        g_instant.captured = false;
+    }
+
+    void InitializeInstantRematch() {
+        if (g_instant.restoring) return;
+        ReleaseInstantBaseline();
+        g_instant = InstantRematchState();
+        char setting[8] = {};
+        g_instant.enabled = GetEnvironmentVariableA("SF4E_INSTANT_REMATCH", setting, sizeof(setting)) > 0
+            && strcmp(setting, "1") == 0 && sf4e::UserApp::netplay
+            && sf4e::UserApp::netplay->client._lobbyData.instantRematchAvailable;
+        if (g_instant.enabled) spdlog::info("Instant rematch: experimental loaded-battle restart enabled");
+    }
+
+    void CaptureInstantBaseline(rSystem* system) {
+        if (!g_instant.enabled || g_instant.captured || g_instant.frame != 0) return;
+        fSystem::SaveState::Save(&g_instant.baseline);
+        fSystem::BuildSnapshot(system, g_instant.baselineProbe);
+        g_instant.captured = true;
+        spdlog::info("Instant rematch: retained frame-zero baseline (game frame {}, {} owners)",
+            g_instant.baselineProbe.frameIdx, g_instant.baseline.keys.size());
+    }
+
+    // Same simulation rule in the ordinary, spectator catch-up and rollback
+    // paths. Once a terminal frame executes, hold the engine at that boundary.
+    // ggpo_idle still corrects a predicted KO; loading an earlier state restores
+    // resultFrame too, so a corrected nonterminal result resumes normally.
+    void SimulateRematchFrame(rSystem* system) {
+        if (!HoldInstantResult()) (system->*rSystem::publicMethods.BattleUpdate)();
+        if (HoldInstantResult() && g_instant.resultFrame < 0)
+            g_instant.resultFrame = g_instant.frame;
+        ++g_instant.frame;
+    }
+}
 
 bool fSystem::bHaltAfterNext = false;
 bool fSystem::bUpdateAllowed = true;
@@ -446,6 +535,7 @@ static bool g_spectatorLoggedFirstFrame = false;
 // One simulated frame from the host's confirmed inputs, for a spectator that
 // has fallen behind. Returns false when the next frame has not arrived yet.
 static bool AdvanceSpectatorFrame(rSystem* _this) {
+    if (HoldInstantResult()) return false;
     fPadSystem::Inputs in[2] = { {0, 0}, {0, 0} };
     int flags = 0;
     if (!GGPO_SUCCEEDED(ggpo_synchronize_input(fSystem::ggpo, (void*)in, sizeof(fPadSystem::Inputs) * 2, &flags))) {
@@ -457,21 +547,240 @@ static bool AdvanceSpectatorFrame(rSystem* _this) {
     if (fSoundPlayerManager::bUsePureSounds) {
         fSoundPlayerManager::SyncState();
     }
-    (_this->*rSystem::publicMethods.BattleUpdate)();
+    SimulateRematchFrame(_this);
     fPadSystem::playbackFrame = -1;
     ggpo_advance_frame(fSystem::ggpo);
     return true;
 }
 
-// Soak watchdog state: when the current match was asked to start, and whether
-// it ever reached GGPO_EVENTCODE_RUNNING. A rematch can stall with one side in
-// the match and the other still sitting in the lobby (seen after a draw), which
-// leaves a black screen and ends an unattended run. See the watchdog in
-// BattleUpdate.
-static DWORD g_ggpoStartTick = 0;
-static bool g_ggpoReachedRunning = false;
+// Pumped even while the engine is waiting for battle initialization and is
+// not calling BattleUpdate. A missing peer must not leave a black screen.
+static sf4e::NetplayStartupWatchdog g_ggpoStartup;
+static bool g_netplayStartupAborted = false;
 static DWORD g_connInterruptedTick = 0;
 static void AbortMatchStart(const char* why);   // defined with StartGGPO below
+
+bool fSystem::NetplayStartupAborted() { return g_netplayStartupAborted; }
+
+void fSystem::StepNetplayStartup() {
+    // Called only after ggpo_idle returns, never inside a GGPO callback.
+    if (ggpo && g_ggpoStartup.Expired(GetTickCount64()))
+        AbortMatchStart("GGPO did not connect to the other player within 30 seconds");
+}
+
+bool fSystem::InstantRematchResultVisible() {
+    return g_instant.preparing || (ggpo && HoldInstantResult());
+}
+
+bool fSystem::InstantRematchResultConfirmed() { return g_instant.confirmed; }
+bool fSystem::InstantRematchVoteSent() { return g_instant.voted; }
+bool fSystem::InstantRematchPreparing() { return g_instant.preparing; }
+bool fSystem::InstantRematchRestarting() { return g_instant.restoring; }
+int fSystem::InstantRematchWinner() { return g_instant.winner; }
+const char* fSystem::InstantRematchStatus() {
+    if (!g_instant.status.empty()) return g_instant.status.c_str();
+    if (g_instant.preparing) return "Synchronizing rematch";
+    if (!g_instant.confirmed) return "Confirming result";
+    return g_instant.voted ? "Waiting for players" : "";
+}
+
+void fSystem::VoteInstantRematch() {
+    if (!g_instant.confirmed || !g_instant.captured || g_instant.voted
+        || g_instant.preparing || !sf4e::UserApp::netplay) return;
+    auto& client = sf4e::UserApp::netplay->client;
+    if (client.ActiveMatchSide() < 0) return;
+    int loser = g_instant.winner < 0 ? -1 : 1 - g_instant.winner;
+    if (client.RequestInstantRematch(g_instant.resultFrame, loser) == k_EResultOK) {
+        g_instant.voted = true;
+        g_instant.status.clear();
+    } else g_instant.status = "Could not request rematch";
+}
+
+void fSystem::ExitInstantRematch() {
+    if (sf4e::UserApp::netplay)
+        sf4e::UserApp::netplay->client.CancelInstantRematch(g_instant.preparing || g_instant.starting);
+    // Do this outside GGPO callbacks, BEFORE allowing the engine to destroy its
+    // battle. Its final idle/rollback callbacks must never see freed owners.
+    if (ggpo) { ggpo_close_session(ggpo); ggpo = nullptr; }
+    ReleaseInstantBaseline();
+    g_instant.enabled = false;
+    g_instant.preparing = false;
+    g_instant.starting = false;
+    g_instant.invalidated = false;
+    bUpdateAllowed = true;
+    rSystem* system = rSystem::staticMethods.GetSingleton();
+    if (system) *rSystem::GetReadyState(system) = rSystem::RS_ISLEAVING;
+}
+
+void fSystem::OnInstantRematchKeyReleased(rKey* key) {
+    if (!g_instant.captured) return;
+    for (const auto& entry : g_instant.baseline.keys) {
+        if (entry.first == key) {
+            spdlog::warn("Instant rematch: retained owner released (key {}, owner {}, type {}, input {}); discarding baseline before destruction",
+                (const void*)key, entry.second.mementoableObject,
+                sf4e::Rtti::GetClassName(entry.second.mementoableObject), g_instant.frame);
+            g_instant.invalidated = true;
+            // A restore can run engine key callbacks. Never free the very
+            // snapshot CopyIntoPlace is currently iterating over.
+            if (!g_instant.loading) ReleaseInstantBaseline();
+            else g_instant.baselineUnsafeToFree = true;
+            break;
+        }
+    }
+}
+
+void fSystem::OnInstantRematchKeyInitialized(rKey* key, void* owner) {
+    if (!g_instant.captured) return;
+    for (const auto& entry : g_instant.baseline.keys) {
+        if (entry.first == key && entry.second.mementoableObject != owner) {
+            spdlog::warn("Instant rematch: retained key owner changed (key {}, saved owner {}, incoming owner {}, input {})",
+                (const void*)key, entry.second.mementoableObject, owner, g_instant.frame);
+            OnInstantRematchKeyReleased(key);
+            break;
+        }
+    }
+}
+
+void fSystem::StepInstantRematch() {
+    if (!g_instant.enabled) return;
+    rSystem* system = rSystem::staticMethods.GetSingleton();
+    if (!system || !sf4e::UserApp::netplay) { ExitInstantRematch(); return; }
+    auto& client = sf4e::UserApp::netplay->client;
+    if (sf4e::SessionClient::bDesyncAbort
+        || *rSystem::GetReadyState(system) == rSystem::RS_ISLEAVING) {
+        ExitInstantRematch(); return;
+    }
+
+    // Fixed boundary, not "prediction depth == 0": input F produced the held
+    // state S(F+1). Later pumping may invalidate a predicted KO and restore an
+    // earlier resultFrame through load_game_state. A spectator must actually
+    // simulate that terminal frame, not merely receive its input packet.
+    if (ggpo && HoldInstantResult() && !g_instant.preparing) {
+        if (!g_instant.heldSince) g_instant.heldSince = GetTickCount64();
+        int confirmed = -1;
+        if (!g_instant.confirmed && g_instant.resultFrame >= 0
+            && GGPO_SUCCEEDED(ggpo_get_last_confirmed_frame(ggpo, &confirmed))
+            && confirmed >= g_instant.resultFrame) {
+            StateSnapshot result;
+            BuildSnapshot(system, result);
+            g_instant.winner = SnapshotWinner(result);
+            g_instant.confirmed = true;
+            sf4e::Lobby::OnMatchResult(g_instant.winner, -1, -1);
+            spdlog::info("Instant rematch: match {} terminal input {} confirmed at {} (winner {})",
+                client.ActiveMatchId(), g_instant.resultFrame, confirmed, g_instant.winner);
+        }
+        // Losing a retained owner during the fight only disables the fast
+        // restart. Finish that fight normally, then leave on a settled result.
+        if (g_instant.invalidated && g_instant.confirmed) {
+            spdlog::warn("Instant rematch: returning to lobby because the retained starting state lost an owner");
+            ExitInstantRematch(); return;
+        }
+        if (g_instant.confirmed && client._spectator && !g_instant.readySent) {
+            int loser = g_instant.winner < 0 ? -1 : 1 - g_instant.winner;
+            if (client.RequestInstantRematch(g_instant.resultFrame, loser) == k_EResultOK)
+                g_instant.readySent = true;
+        }
+        // Bounds an incompatible peer, unavailable server, or abandoned prompt.
+        if (GetTickCount64() - g_instant.heldSince > 90000) { ExitInstantRematch(); return; }
+    } else if (!g_instant.preparing && !g_instant.starting) {
+        g_instant.heldSince = 0;
+        g_instant.confirmed = false;
+        g_instant.voted = false;
+        g_instant.readySent = false;
+    }
+
+    SessionProtocol::InstantRematchEvent event;
+    while (client.TakeInstantRematchEvent(event)) {
+        if (event.action == SessionProtocol::IR_ABORT) {
+            if (event.nextMatchId != 0) sf4e::Lobby::OnInstantRematchStarted();
+            spdlog::warn("Instant rematch: cancelled ({})", event.reason);
+            if (ggpo && !g_ggpoStartup.Running()) {
+                AbortMatchStart("server cancelled the match before GGPO connected");
+                return;
+            }
+            if (event.nextMatchId == 0 && !g_instant.preparing && !g_instant.starting
+                && !HoldInstantResult()) {
+                // A viewer may leave while the players are still fighting.
+                // Losing a future rematch participant must not end that fight.
+                ReleaseInstantBaseline();
+                g_instant.enabled = false;
+                return;
+            }
+            ExitInstantRematch(); return;
+        }
+        if (event.action == SessionProtocol::IR_PREPARE) {
+            if (!g_instant.confirmed || !g_instant.captured || !HoldInstantResult()
+                || event.resultFrame != g_instant.resultFrame
+                || event.loserSide != (g_instant.winner < 0 ? -1 : 1 - g_instant.winner)) {
+                ExitInstantRematch(); return;
+            }
+            // Lifetime hooks invalidate on release/reuse. Membership is also
+            // checked here before dereferencing ANY retained key.
+            for (const auto& entry : g_instant.baseline.keys) {
+                if (fKey::trackedKeys.count(entry.first) == 0) { ExitInstantRematch(); return; }
+            }
+            g_instant.preparing = true;
+            bUpdateAllowed = false;
+            if (ggpo) { ggpo_close_session(ggpo); ggpo = nullptr; }
+            for (int i = 0; i < NUM_SAVE_STATES; ++i)
+                if (saveStates[i].used) SaveState::Free(&saveStates[i]);
+            g_instant.loading = true;
+            SaveState::Load(&g_instant.baseline);
+            g_instant.loading = false;
+            if (g_instant.invalidated) { ExitInstantRematch(); return; }
+            StateSnapshot restored;
+            BuildSnapshot(system, restored);
+            if (SessionProtocol::SnapshotGameplayDiffers(g_instant.baselineProbe, restored)
+                || SessionProtocol::SnapshotFlowDiffers(g_instant.baselineProbe, restored)
+                || restored.frameIdx != g_instant.baselineProbe.frameIdx) {
+                spdlog::error("Instant rematch: baseline verification failed: {}",
+                    SessionProtocol::DescribeSnapshotDiff(g_instant.baselineProbe, restored));
+                ExitInstantRematch(); return;
+            }
+            snapshotMap.clear();
+            client.pendingRemoteSnapshots.clear();
+            nFramesToSkip = 0;
+            nExtraFramesToSimulate = 0;
+            fPadSystem::playbackFrame = -1;
+            g_instant.startSince = GetTickCount64();
+            if (client.AcknowledgeInstantRematch() != k_EResultOK) { ExitInstantRematch(); return; }
+        }
+        if (event.action == SessionProtocol::IR_START) {
+            // Take(Start) already committed the NEW match ID. Clear the old
+            // result even if startup now fails, or menu teardown would report
+            // the previous win against an unplayed match and award it twice.
+            sf4e::Lobby::OnInstantRematchStarted();
+            if (!g_instant.preparing || ggpo || !g_instant.captured) { ExitInstantRematch(); return; }
+            // The server has heard from every retained participant AFTER its
+            // old GGPO socket was closed. Reuse the existing loaded scene and
+            // connection setup, but consume no engine asset-loading hooks.
+            g_instant.restoring = true;
+            sf4e::UserApp::_OnVsBattleTasksRegistered();
+            g_instant.restoring = false;
+            nNextBattleStartFlowTarget = -1;
+            fVsBattle::bOverrideNextRandomSeed = false;
+            fVsBattle::nextMatchRandomSeed = 0xffffffff;
+            if (!ggpo) { ExitInstantRematch(); return; }
+            g_instant.preparing = false;
+            g_instant.starting = true;
+            g_instant.startSince = GetTickCount64();
+            g_instant.confirmed = false;
+            g_instant.voted = false;
+            g_instant.readySent = false;
+            g_instant.heldSince = 0;
+            g_instant.frame = 0;
+            g_instant.resultFrame = -1;
+            g_instant.status.clear();
+            spdlog::info("Instant rematch: restored baseline, starting GGPO epoch {}", event.nextMatchId);
+        }
+    }
+    if (g_instant.starting && g_ggpoStartup.Running()) g_instant.starting = false;
+    if ((g_instant.starting || g_instant.preparing)
+        && GetTickCount64() - g_instant.startSince > 20000) {
+        spdlog::warn("Instant rematch: restart timed out");
+        ExitInstantRematch();
+    }
+}
 
 static const char* BattleFlowName(DWORD f) {
     switch (f) {
@@ -550,27 +859,13 @@ void fSystem::BattleUpdate() {
     static int nLastRandomInputFrame = -1;
     static fPadSystem::Inputs randomInputs[2] = { { 0, 0 }, { 0, 0 } };
 
-    // Soak watchdog. A rematch can stall with this side in the match while the
-    // peer is still in the lobby (reproduced after a draw): GGPO never reaches
-    // RUNNING, the screen stays black and an unattended run dies there. Bail
-    // back to the lobby so the auto-ready starts a fresh match instead. Checked
-    // before the bUpdateAllowed bail-out, because a stalled match is exactly
-    // the case where the update is not allowed to proceed.
-    // Soak runs only, again. Arming this for real matches turned a black
-    // screen into a CRASH: AbortMatchStart only sets RS_ISLEAVING, it does not
-    // close the GGPO session, so GGPO kept calling back into a battle system
-    // that was tearing down and the game dereferenced null half a second
-    // later. Recovering from a stalled start needs the session closed first,
-    // which is a bigger change than this watchdog.
-    if (sf4e::bSoakTest && ggpo != nullptr && !g_ggpoReachedRunning &&
-        g_ggpoStartTick != 0 && (GetTickCount() - g_ggpoStartTick) > 30000) {
-        g_ggpoStartTick = 0;
-        AbortMatchStart("soak watchdog: GGPO never reached RUNNING (peer never joined)");
-    }
-
     if (!bUpdateAllowed) {
         return;
     }
+
+    // Do not advance the GGPO head while holding a terminal frame. The main
+    // application pump continues ggpo_idle, including any correcting rollback.
+    if (HoldInstantResult()) return;
 
     // Pin the FP mode before this frame is simulated, so a later rollback of
     // this frame re-simulates under the identical mode. See EnforceSimFpControl.
@@ -675,6 +970,7 @@ void fSystem::BattleUpdate() {
         nIdleFramesInTimeline++;
     }
     if (ggpo && (flowNow != BF__IDLE || (bGgpoDuringIdle && bMatchLeftIdle))) {
+        CaptureInstantBaseline(_this);
         GGPOErrorCode result = GGPO_OK;
         if (localPlayerHandle != GGPO_INVALID_HANDLE) {
             if (syncTest.bSoak) {
@@ -748,7 +1044,7 @@ void fSystem::BattleUpdate() {
                 if (fSoundPlayerManager::bUsePureSounds) {
                     fSoundPlayerManager::SyncState();
                 }
-                (_this->*sysMethods.BattleUpdate)();
+                SimulateRematchFrame(_this);
                 fPadSystem::playbackFrame = -1;
                 GGPOErrorCode err = ggpo_advance_frame(ggpo);
                 if (!GGPO_SUCCEEDED(err)) {
@@ -918,17 +1214,15 @@ void fSystem::BattleUpdate() {
     }
 
     // Online match over: the moment the flow reaches the match result, the
-    // deciding round has just ended, so whoever has more life left won.
-    // Time-over and KO both satisfy that; a double KO reads as a draw.
+    // deciding round has just ended. Compare remaining health percentages,
+    // since different characters have different maximum vitality.
     static DWORD lastFlow = 0xffffffff;
     DWORD flow = *rSystem::staticVars.CurrentBattleFlow;
     if (flow != lastFlow) {
-        if (ggpo && !syncTest.bActive && (flow == BF__MATCH_OVER || flow == BF__MATCH_RESULT)) {
+        if (ggpo && !syncTest.bActive && !g_instant.enabled && (flow == BF__MATCH_OVER || flow == BF__MATCH_RESULT)) {
             StateSnapshot s;
             BuildSnapshot(_this, s);
-            int winner = -1;
-            if (s.chara[0].vit.integral > s.chara[1].vit.integral) winner = 0;
-            else if (s.chara[1].vit.integral > s.chara[0].vit.integral) winner = 1;
+            int winner = SnapshotWinner(s);
             sf4e::Lobby::OnMatchResult(winner, -1, -1);
         }
         lastFlow = flow;
@@ -942,6 +1236,10 @@ void fSystem::BattleUpdate() {
 
 void fSystem::CloseBattle() {
     rSystem* _this = (rSystem*)this;
+    g_ggpoStartup.Reset();
+    g_netplayStartupAborted = false;
+    ReleaseInstantBaseline();
+    g_instant = InstantRematchState();
     if (ggpo) {
         // Report the idle-frame counts for ANY session, not just a sync test.
         // Online is the only place the two numbers can disagree, and online is
@@ -1236,17 +1534,22 @@ void fSystem::RecordAllToInternalMementos(rSystem* system, GameMementoKey::Memen
 static void AbortMatchStart(const char* why) {
     spdlog::error("Match start aborted: {}", why);
 
-    // Drop the session BEFORE asking the game to leave. It is half-built by
-    // definition here -- we are aborting precisely because it never reached
-    // RUNNING -- and every rollback path keys off "ggpo != nullptr", so
-    // leaving it live means the teardown can still be called back into a
-    // session that never had two players. Clearing it first makes all of
-    // those paths no-ops on the way out.
-    if (fSystem::ggpo) {
-        ggpo_close_session(fSystem::ggpo);
-        fSystem::ggpo = nullptr;
-    }
+    // The loading barrier must let the engine finish initializing and then
+    // leave, even if the server never sends BattleSynced for this attempt.
+    g_netplayStartupAborted = true;
+    g_ggpoStartup.Reset();
+    // This closes GGPO before releasing the retained snapshot or permitting
+    // battle teardown, and notifies the rematch coordinator when applicable.
+    fSystem::ExitInstantRematch();
     fSystem::nFramesToSkip = 0;
+    fSystem::nExtraFramesToSimulate = 0;
+    fSystem::nNextBattleStartFlowTarget = -1;
+    fSystem::localPlayerHandle = GGPO_INVALID_HANDLE;
+    fPadSystem::playbackFrame = -1;
+    fSystem::ResetPacing("startup aborted");
+    fVsBattle::bOverrideNextRandomSeed = false;
+    fVsBattle::nextMatchRandomSeed = 0xffffffff;
+    fVsBattle::bTerminateOnNextLeftBattle = true;
     for (int i = 0; i < NUM_SAVE_STATES; i++) {
         if (fSystem::saveStates[i].used) {
             fSystem::SaveState::Free(&fSystem::saveStates[i]);
@@ -1287,6 +1590,9 @@ static void __cdecl OnGgpoAssertFailed(const char* msg) {
 }
 
 void fSystem::StartGGPO(GGPOPlayer* inPlayers, int numPlayers, int port, int frameDelay, DWORD rngSeed) {
+    g_netplayStartupAborted = false;
+    g_ggpoStartup.Reset();
+    InitializeInstantRematch();
     ResetPacing(nullptr);
     {
         char pacingEnv[8] = { 0 };
@@ -1322,11 +1628,8 @@ void fSystem::StartGGPO(GGPOPlayer* inPlayers, int numPlayers, int port, int fra
     // the lobby data can be momentarily incomplete when the match fires, and a
     // half-built player list makes ggpo_add_player fail ("could not add
     // player"). Refuse to start rather than freeze on that box.
-    if (numPlayers < 2
-        || inPlayers[0].player_num != 1 || inPlayers[1].player_num != 2
-        || (inPlayers[0].type != GGPO_PLAYERTYPE_LOCAL && inPlayers[0].type != GGPO_PLAYERTYPE_REMOTE)
-        || (inPlayers[1].type != GGPO_PLAYERTYPE_LOCAL && inPlayers[1].type != GGPO_PLAYERTYPE_REMOTE)) {
-        AbortMatchStart("player list not ready (both players not yet in the lobby)");
+    if (!sf4e::ValidNetplayPlayerSlots(inPlayers, numPlayers)) {
+        AbortMatchStart("invalid player slots (expected one local side and one remote side)");
         return;
     }
 
@@ -1338,8 +1641,7 @@ void fSystem::StartGGPO(GGPOPlayer* inPlayers, int numPlayers, int port, int fra
     // tests, so a real player whose opponent vanished between the lobby and the
     // first frame sat on a black screen forever with nothing in the log --
     // which is exactly what the comment on the watchdog already described.
-    g_ggpoStartTick = GetTickCount();
-    g_ggpoReachedRunning = false;
+    g_ggpoStartup.Arm(GetTickCount64());
 
     GGPOSessionCallbacks cb = { 0 };
     cb.begin_game = ggpo_begin_game_callback;
@@ -1369,6 +1671,7 @@ void fSystem::StartGGPO(GGPOPlayer* inPlayers, int numPlayers, int port, int fra
     ggpo_set_disconnect_notify_start(ggpo, 2000);
 
     int localPlayerIdx = -1;
+    localPlayerHandle = GGPO_INVALID_HANDLE;
     for (int i = 0; i < 2; i++) {
         players[i].type = inPlayers[i].type;
         // Fresh window each match: these are static and would otherwise carry
@@ -1407,6 +1710,9 @@ void fSystem::StartGGPO(GGPOPlayer* inPlayers, int numPlayers, int port, int fra
 }
 
 void fSystem::StartSpectating(unsigned short localport, int num_players, char* host_ip, unsigned short host_port, DWORD rngSeed) {
+    g_netplayStartupAborted = false;
+    InitializeInstantRematch();
+    g_ggpoStartup.Arm(GetTickCount64());
     ResetPacing(nullptr);
     pacer.enabled = false;
     for (int i = 0; i < NUM_SAVE_STATES; i++) {
@@ -1441,7 +1747,8 @@ void fSystem::StartSpectating(unsigned short localport, int num_players, char* h
     );
     if (result != GGPO_OK) {
         spdlog::error("GGPO session could not start: {}", (int)result);
-        MessageBoxA(NULL, "GGPO could not start, check logs", NULL, MB_OK);
+        AbortMatchStart("ggpo_start_spectating failed");
+        return;
     }
 
     // When the host closes its session at the end of the match, the last
@@ -1507,7 +1814,7 @@ bool fSystem::ggpo_advance_frame_callback(int)
     // This callback only ever runs while GGPO re-simulates rolled-back frames,
     // so it is exactly the window the soak-test flow logger wants to flag.
     bInRollback = true;
-    (system->*rSystem::publicMethods.BattleUpdate)();
+    SimulateRematchFrame(system);
     // Log while still flagged, so a transition decided during a rollback
     // re-simulation is reported as such.
     LogFlowTransition(system);
@@ -1545,6 +1852,7 @@ bool fSystem::ggpo_load_game_state_callback(unsigned char* buffer, int len)
 
 bool fSystem::ggpo_save_game_state_callback(unsigned char** buffer, int* len, int* checksum, int frame)
 {
+    g_instant.frame = frame;
     // No GGPO callback allocates data, then hands ownership to GGPO-
     // sf4e preallocates and manages all its savestates, and the memory
     // allocation all happens internally. Consequently the memory
@@ -1675,7 +1983,7 @@ bool fSystem::ggpo_on_event_callback(GGPOEvent* info) {
         spdlog::info("GGPO: Synchronized with peer");
         break;
     case GGPO_EVENTCODE_RUNNING:
-        g_ggpoReachedRunning = true;   // soak watchdog: the match really started
+        g_ggpoStartup.MarkRunning();
         bUpdateAllowed = true;
         spdlog::info("GGPO: Running");
         break;
@@ -1715,7 +2023,7 @@ bool fSystem::ggpo_on_event_callback(GGPOEvent* info) {
             break;
         }
         spdlog::error("GGPO: disconnected from peer (no packets for the timeout); leaving the match");
-        *rSystem::GetReadyState(system) = rSystem::RS_ISLEAVING;
+        if (system) *rSystem::GetReadyState(system) = rSystem::RS_ISLEAVING;
         break;
     case GGPO_EVENTCODE_TIMESYNC:
         if (pacer.enabled && localPlayerHandle != GGPO_INVALID_HANDLE && sf4e::Platform::D3D::LimiterActive()) {
@@ -1989,6 +2297,8 @@ void fSystem::SaveState::Reclaim(SaveState* victim, const char* reason, int slot
 }
 
 void fSystem::SaveState::Load(SaveState* src) {
+    g_instant.frame = src->transportFrame;
+    g_instant.resultFrame = src->instantResultFrame;
     std::vector<std::pair<rKey*, rKey>> tmpVec;
 
     // A load abandons the current timeline, and with it the stops queued by
@@ -2035,6 +2345,8 @@ void fSystem::SaveState::Save(SaveState* dst) {
     assert(dst->keys.empty());
 
     dst->used = true;
+    dst->transportFrame = g_instant.frame;
+    dst->instantResultFrame = g_instant.resultFrame;
 
     RecordAllToInternalMementos(system, &GGPO_MEMENTO_ID);
     for (auto iter = fKey::trackedKeys.begin(); iter != fKey::trackedKeys.end(); iter++) {
@@ -2150,6 +2462,8 @@ void fSystem::SaveState::ComputeChecksum(SaveState* s) {
     s->globalChecksum = HashGlobalData(s->d, normalizer);
     s->checksum = Mix(total, s->globalChecksum);
     s->checksumRaw = Mix(totalRaw, s->globalChecksum);
+    s->checksum = Mix(Mix(s->checksum, (uint32_t)s->transportFrame), (uint32_t)s->instantResultFrame);
+    s->checksumRaw = Mix(Mix(s->checksumRaw, (uint32_t)s->transportFrame), (uint32_t)s->instantResultFrame);
 }
 
 void fSystem::ArmSyncTest(int checkDistance) {

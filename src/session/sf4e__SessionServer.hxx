@@ -10,6 +10,7 @@
 
 #include "../Dimps/Dimps__Math.hxx"
 #include "sf4e__SessionProtocol.hxx"
+#include "sf4e__InstantRematch.hxx"
 
 namespace sf4e {
 	extern const int SESSION_SERVER_MAX_MESSAGES_PER_POLL;
@@ -83,6 +84,11 @@ namespace sf4e {
 		std::map<HSteamNetConnection, uint32_t> _accepted;
 		void HandleResults(HSteamNetConnection reporter, const SessionProtocol::LobbyReportResults& result);
 		RoomScoreTracker _roomScores;
+		InstantRematch _instantRematch;
+		InstantRematchCommit _instantRematchCommit;
+		void BeginInstantRematch();
+		void HandleInstantRematchAction(InstantRematch::Action action);
+		void AbortCommittedInstantRematch();
 		uint64_t _nextRoomMemberId = 0;
 
 		// Once both players have offered an endpoint, hand each of them the

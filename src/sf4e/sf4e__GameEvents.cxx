@@ -8,6 +8,7 @@
 #include "../Dimps/Dimps__Platform.hxx"
 #include "sf4e__Event.hxx"
 #include "sf4e__GameEvents.hxx"
+#include "sf4e__Game__Battle__System.hxx"
 #include "sf4e__UserApp.hxx"
 
 using Dimps::Game::Request;
@@ -221,6 +222,14 @@ int fVsBattle::HasInitialized() {
 	// delay.
 	if (bBlockInitialization) {
 		return 0;
+	}
+	// GGPO startup can time out before both clients finish loading. Its
+	// session is already closed; finish engine initialization so RS_ISLEAVING
+	// can tear the battle down instead of waiting forever for BattleSynced.
+	if (sf4e::Game::Battle::System::NetplayStartupAborted()) {
+		auto* system = Dimps::Game::Battle::System::staticMethods.GetSingleton();
+		if (system) *Dimps::Game::Battle::System::GetReadyState(system) = Dimps::Game::Battle::System::RS_ISLEAVING;
+		return 1;
 	}
 	if (fUserApp::netplay) {
 		if (!bSessionSentLoaded) {

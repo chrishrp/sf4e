@@ -37,5 +37,9 @@ namespace sf4e {
 		// rematch / change character / leave when the game returns to the
 		// main menu.
 		void OnMatchResult(int winnerSide, int charaP1, int charaP2);
+
+		// The loaded battle has restarted through the experimental rematch
+		// path. Forget the old result without returning to the lobby menu.
+		void OnInstantRematchStarted();
 	}
 }

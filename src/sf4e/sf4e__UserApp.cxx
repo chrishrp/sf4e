@@ -49,6 +49,15 @@ using sf4e::SessionServer;
 std::unique_ptr<fUserApp::Netplay> fUserApp::netplay;
 std::unique_ptr<SessionServer> fUserApp::server;
 
+namespace {
+    // Immutable for this loaded battle. Later lobby membership updates can
+    // refresh advertised candidates; those are not necessarily the LAN/public
+    // endpoint which GGPO actually proved and used for the previous match.
+    bool retainedDirect = false;
+    std::string retainedPeerIp;
+    uint16_t retainedPeerPort = 0;
+}
+
 sf4e::UserApp::Netplay::Netplay(
     const SessionClient::Callbacks& callbacks,
     std::string sidecarHash,
@@ -147,12 +156,21 @@ void fUserApp::_OnVsBattleTasksRegistered()
         // opens, point GGPO at the other machine and skip the relay hop. If
         // anything fails we fall through with the relay address already in
         // place, so the match plays exactly as it does today.
-        bool direct = netplay->client.TryDirectPath();
+        // A retained battle keeps the already-proven endpoints. Re-punching
+        // here can make one side choose direct while the other chooses relay
+        // as their old sockets close at different wall-clock times.
+        bool direct = retainedDirect;
+        if (!fSystem::InstantRematchRestarting()) {
+            direct = netplay->client.TryDirectPath();
+            retainedDirect = direct;
+            retainedPeerIp = netplay->client.DirectPeerIp();
+            retainedPeerPort = netplay->client.DirectPeerPort();
+        }
         if (direct) {
             for (int i = 0; i < numPlayers; i++) {
                 if (players[i].type == GGPO_PLAYERTYPE_REMOTE) {
-                    strcpy_s(players[i].u.remote.ip_address, 32, netplay->client.DirectPeerIp().c_str());
-                    players[i].u.remote.port = netplay->client.DirectPeerPort();
+                    strcpy_s(players[i].u.remote.ip_address, 32, retainedPeerIp.c_str());
+                    players[i].u.remote.port = retainedPeerPort;
                 }
             }
         }
@@ -162,6 +180,14 @@ void fUserApp::_OnVsBattleTasksRegistered()
         }
         else if (matchDelay != (int)netplay->delay) {
             spdlog::info("Input delay {} for this match (you chose {}; the higher choice is used for both)", matchDelay, (int)netplay->delay);
+        }
+        spdlog::info("Netplay: match {}, local side {}, UDP port {}, route {}",
+            netplay->client.ActiveMatchId(), localIdx + 1, netplay->client._ggpoPort,
+            direct ? "peer to peer" : "server relay");
+        for (int i = 0; i < numPlayers; ++i) {
+            if (players[i].type == GGPO_PLAYERTYPE_REMOTE)
+                spdlog::info("Netplay: remote side {} at {}:{}", players[i].player_num,
+                    players[i].u.remote.ip_address, players[i].u.remote.port);
         }
         fSystem::StartGGPO(
             players,
@@ -316,6 +342,8 @@ void fUserApp::Steam_PostUpdate() {
     if (fSystem::ggpo) {
         ggpo_idle(fSystem::ggpo, 1);
     }
+    fSystem::StepNetplayStartup();
+    fSystem::StepInstantRematch();
     fSystem::StepPacing();
 
     rUserApp::staticMethods.Steam_PostUpdate();
