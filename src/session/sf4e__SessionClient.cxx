@@ -181,6 +181,8 @@ int SessionClient::Connect(const SteamNetworkingIPAddr& serverAddr) {
 }
 
 void SessionClient::Disconnect() {
+	_instantRematchEvents.clear();
+	_instantRematchPhase = 0;
 	if (_conn != k_HSteamNetConnection_Invalid) {
 		_interface->CloseConnection(_conn, k_ESteamNetConnectionEnd_App_Generic, nullptr, true);
 		_conn = k_HSteamNetConnection_Invalid;
@@ -355,6 +357,9 @@ int SessionClient::Step()
 			}
 		}
 		else if (type == SessionProtocol::MT_LOBBY_ALLREADY) {
+			_instantRematchEvents.clear();
+			_instantRematchPhase = 0;
+			_desyncReported = false;
 			_activeMatchId = _matchData.matchId;
 			_activeMatchSide = -1;
 			_activeMatchReported = false;
@@ -368,7 +373,45 @@ int SessionClient::Step()
 			_callbacks.OnReady(this, _callbacks);
 		}
 		else if (type == SessionProtocol::MT_BATTLE_SYNCED) {
+			SessionProtocol::BattleSynced synced;
+			try { msg.get_to(synced); } catch (const json::exception&) { continue; }
+			if (_lobbyData.instantRematchAvailable && (synced.matchId == 0 || synced.matchId != _activeMatchId)) continue;
 			_callbacks.OnBattleSynced(this, _callbacks);
+		}
+		else if (type == SessionProtocol::MT_REMATCH_EVENT) {
+			SessionProtocol::InstantRematchEvent event;
+			try { msg.get_to(event); } catch (const json::exception&) { continue; }
+			if (!_lobbyData.instantRematchAvailable || !event.previousMatchId) continue;
+			if (event.action == SessionProtocol::IR_ABORT && event.nextMatchId > event.previousMatchId
+				&& (_activeMatchId == event.previousMatchId || _activeMatchId == event.nextMatchId)) {
+				// Startup was cancelled after the server committed Start. This
+				// must work even if the engine already exited and never drained
+				// its queued Start. The server closed the new epoch unscored.
+				_activeMatchId = event.nextMatchId;
+				_activeMatchReported = true;
+				_instantRematchPhase = 5;
+				_instantRematchEvents.clear();
+				_instantRematchEvents.push_back(event);
+				pendingRemoteSnapshots.clear();
+				continue;
+			}
+			if (event.previousMatchId != _activeMatchId) continue;
+			if (event.action == SessionProtocol::IR_PREPARE) {
+				if (_instantRematchPhase != 1 || event.resultFrame != _instantRematchResultFrame
+					|| event.loserSide != _instantRematchLoserSide || event.nextMatchId != 0) continue;
+				_instantRematchPhase = 2;
+			}
+			else if (event.action == SessionProtocol::IR_START) {
+				if (_instantRematchPhase != 3 || event.nextMatchId <= _activeMatchId
+					|| event.resultFrame != _instantRematchResultFrame || event.loserSide != _instantRematchLoserSide) continue;
+				_instantRematchPhase = 4;
+			}
+			else {
+				if (_instantRematchPhase == 5) continue;
+				_instantRematchPhase = 5;
+				_instantRematchEvents.clear();
+			}
+			_instantRematchEvents.push_back(event);
 		}
 		else if (type == SessionProtocol::MT_BATTLE_SNAPSHOT) {
 			SessionProtocol::BattleSnapshot m;
@@ -379,6 +422,8 @@ int SessionClient::Step()
 				spdlog::info("Client: could not deserialize incoming checksum msg");
 				continue;
 			}
+			if (_lobbyData.instantRematchAvailable && (m.matchId == 0 || m.matchId != _activeMatchId)) continue;
+			if (_instantRematchPhase >= 2 && _instantRematchPhase <= 4) continue;
 
 			auto localSnapshotIter = fSystem::snapshotMap.find(m.snapshot.frameIdx);
 			if (localSnapshotIter != fSystem::snapshotMap.end()) {
@@ -662,6 +707,9 @@ void SessionClient::OnSteamNetConnectionStatusChanged(SteamNetConnectionStatusCh
 }
 
 EResult SessionClient::Send(nlohmann::json& msg, int64_t* outMessageNum) {
+	// Epoch-tag diagnostics at the common send point; game hooks do not need
+	// to know whether this server supports instantaneous rematches.
+	if (msg.value("type", std::string()) == "battle_snapshot") msg["matchId"] = _activeMatchId;
 	std::string buf = msg.dump();
 	return _interface->SendMessageToConnection(
 		_conn, buf.c_str(), (uint32)buf.length(),
@@ -710,6 +758,71 @@ EResult SessionClient::Lobby_ReportResults(int loserSide)
 	return result;
 }
 
+EResult SessionClient::RequestInstantRematch(int resultFrame, int loserSide) {
+	if (!_connected || !_lobbyData.instantRematchAvailable || !_activeMatchId
+		|| _activeMatchReported || bDesyncAbort || resultFrame < 0 || loserSide < -1 || loserSide > 1)
+		return k_EResultInvalidState;
+	bool participant = false;
+	for (auto& member : _lobbyData.members) {
+		if (member.connId == _cid) participant = !member.spectator || member.watching;
+	}
+	if (!participant) return k_EResultInvalidState;
+	if (_instantRematchPhase != 0) {
+		return _instantRematchPhase < 5 && resultFrame == _instantRematchResultFrame
+			&& loserSide == _instantRematchLoserSide ? k_EResultOK : k_EResultInvalidState;
+	}
+	SessionProtocol::InstantRematchRequest request;
+	request.matchId = _activeMatchId;
+	request.resultFrame = resultFrame;
+	request.loserSide = loserSide;
+	json msg = request;
+	EResult result = Send(msg, nullptr);
+	if (result == k_EResultOK) {
+		_instantRematchPhase = 1;
+		_instantRematchResultFrame = resultFrame;
+		_instantRematchLoserSide = loserSide;
+	}
+	return result;
+}
+
+EResult SessionClient::AcknowledgeInstantRematch() {
+	if (_instantRematchPhase == 3) return k_EResultOK;
+	if (!_connected || _instantRematchPhase != 2) return k_EResultInvalidState;
+	SessionProtocol::InstantRematchAck ack;
+	ack.matchId = _activeMatchId;
+	json msg = ack;
+	EResult result = Send(msg, nullptr);
+	if (result == k_EResultOK) _instantRematchPhase = 3;
+	return result;
+}
+
+EResult SessionClient::CancelInstantRematch(bool restartPending) {
+	if (!_connected || !_lobbyData.instantRematchAvailable || !_activeMatchId) return k_EResultInvalidState;
+	SessionProtocol::InstantRematchCancel cancel;
+	cancel.matchId = _activeMatchId;
+	cancel.restartPending = restartPending;
+	json msg = cancel;
+	return Send(msg, nullptr);
+}
+
+bool SessionClient::TakeInstantRematchEvent(SessionProtocol::InstantRematchEvent& event) {
+	if (_instantRematchEvents.empty()) return false;
+	event = _instantRematchEvents.front();
+	_instantRematchEvents.pop_front();
+	if (event.action == SessionProtocol::IR_START) {
+		// The engine has already restored its own baseline and acknowledged
+		// Prepare. Commit identity immediately before creating fresh GGPO.
+		_activeMatchId = event.nextMatchId;
+		_matchData.matchId = event.nextMatchId;
+		_activeMatchReported = false;
+		_instantRematchPhase = 0;
+		_desyncReported = false;
+		g_desyncLogged = 0;
+		pendingRemoteSnapshots.clear();
+	}
+	return true;
+}
+
 EResult SessionClient::PreBattle_SetEnv(uint32_t rngSeed)
 {
 	SessionProtocol::PreBattleSetEnv msg;
@@ -749,6 +862,7 @@ EResult SessionClient::PreBattle_SetStage(int32_t stageID)
 EResult SessionClient::Battle_Loaded()
 {
 	SessionProtocol::BattleLoaded msg;
+	msg.matchId = _activeMatchId;
 	json j = msg;
 	EResult result = Send(j, nullptr);
 	if (result != k_EResultOK) {

@@ -2,6 +2,13 @@
 
 A process-inspection and modification tool for the Steam release of _Ultra Street Fighter 4_.
 
+## Experimental instant rematch
+
+The `feature/instant-rematch` branch contains an opt-in 1.2.0 prototype that
+keeps the battle loaded and starts a fresh synchronized GGPO session after
+both players accept. See [the two-PC test guide](INSTANT-REMATCH-TEST.md) and
+[the GGPO design and validation notes](docs/INSTANT-REMATCH.md).
+
 ## Arcade lobby fork
 
 This fork builds on [fabeloper/sf4e](https://github.com/fabeloper/sf4e) 1.0.2 with a

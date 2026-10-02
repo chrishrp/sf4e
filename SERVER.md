@@ -115,7 +115,7 @@ echo -n '{"op":"ping"}' | nc -u -w2 198.51.100.7 23400
 ```
 
 A working server answers with something like
-`{"capacity":20,"lobbies":0,"ok":true,"version":"1.1.0"}`. If your own
+`{"capacity":20,"lobbies":0,"ok":true,"version":"1.2.0"}`. If your own
 machine answers but a remote one gets nothing, the provider firewall is the
 place to look.
 

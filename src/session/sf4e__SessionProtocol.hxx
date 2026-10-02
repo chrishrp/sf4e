@@ -136,6 +136,7 @@ namespace sf4e {
 			std::vector<MemberData> members;
 			// False when connected to a server predating shared room scores.
 			bool roomScoresAvailable = false;
+			bool instantRematchAvailable = false;
 
 			static const LobbyData NULL_LOBBY;
 		};
@@ -191,6 +192,10 @@ namespace sf4e {
 			// a player volunteering their log file -- which is exactly what we
 			// could not get from the one report that mattered most.
 			MT_DESYNC_REPORT,
+			MT_REMATCH_REQUEST,
+			MT_REMATCH_ACK,
+			MT_REMATCH_CANCEL,
+			MT_REMATCH_EVENT,
 
 			MT_FORWARD,
 		};
@@ -217,6 +222,10 @@ namespace sf4e {
 			{MT_DIRECT_OFFER, "direct_offer"},
 			{MT_DIRECT_PEER, "direct_peer"},
 			{MT_DESYNC_REPORT, "desync_report"},
+			{MT_REMATCH_REQUEST, "rematch_request"},
+			{MT_REMATCH_ACK, "rematch_ack"},
+			{MT_REMATCH_CANCEL, "rematch_cancel"},
+			{MT_REMATCH_EVENT, "rematch_event"},
 
 			{MT_FORWARD, "forward"},
 		})
@@ -294,6 +303,35 @@ namespace sf4e {
 			uint32_t rngSeed;
 		};
 
+		struct InstantRematchRequest {
+			MessageType type = MT_REMATCH_REQUEST;
+			uint64_t matchId = 0;
+			int32_t resultFrame = -1;
+			int32_t loserSide = -2;
+		};
+		struct InstantRematchAck {
+			MessageType type = MT_REMATCH_ACK;
+			uint64_t matchId = 0;
+		};
+		struct InstantRematchCancel {
+			MessageType type = MT_REMATCH_CANCEL;
+			uint64_t matchId = 0;
+			bool restartPending = false;
+		};
+		enum InstantRematchAction { IR_PREPARE, IR_START, IR_ABORT };
+		NLOHMANN_JSON_SERIALIZE_ENUM(InstantRematchAction, {
+			{IR_ABORT, "abort"}, {IR_PREPARE, "prepare"}, {IR_START, "start"},
+		})
+		struct InstantRematchEvent {
+			MessageType type = MT_REMATCH_EVENT;
+			InstantRematchAction action = IR_ABORT;
+			uint64_t previousMatchId = 0;
+			uint64_t nextMatchId = 0;
+			int32_t resultFrame = -1;
+			int32_t loserSide = -2;
+			std::string reason;
+		};
+
 		struct PreBattleSetChara {
 			MessageType type = MT_PREBATTLE_SETCHARA;
 			CharaConditions chara;
@@ -350,10 +388,12 @@ namespace sf4e {
 
 		struct BattleLoaded {
 			MessageType type = MT_BATTLE_LOADED;
+			uint64_t matchId = 0;
 		};
 
 		struct BattleSynced {
 			MessageType type = MT_BATTLE_SYNCED;
+			uint64_t matchId = 0;
 		};
 
 		// Soak-test GameManager probe geometry. One chunk per checksum, sampled
@@ -424,6 +464,7 @@ namespace sf4e {
 		struct BattleSnapshot {
 			MessageType type = MT_BATTLE_SNAPSHOT;
 			StateSnapshot snapshot;
+			uint64_t matchId = 0;
 		};
 
 		struct ForwardMessage {
@@ -453,7 +494,7 @@ namespace sf4e {
 			m.roomMemberId = j.value("roomMemberId", uint64_t(0));
 			m.roomScore = j.value("roomScore", RoomScore());
 		}
-		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(LobbyData, id, editionSelect, roundCount, roundTime, members, isPublic, roomScoresAvailable);
+		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(LobbyData, id, editionSelect, roundCount, roundTime, members, isPublic, roomScoresAvailable, instantRematchAvailable);
 		// Explicit rather than the macro: MatchData holds C arrays, which the
 		// _WITH_DEFAULT form cannot assign, and inputDelay must default when a
 		// server that predates it leaves the key out.
@@ -493,6 +534,10 @@ namespace sf4e {
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(LobbyReady, type, inputDelay, ready);
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(LobbyAllReady, type);
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(LobbyReportResults, type, loserSide, matchId);
+		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(InstantRematchRequest, type, matchId, resultFrame, loserSide);
+		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(InstantRematchAck, type, matchId);
+		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(InstantRematchCancel, type, matchId, restartPending);
+		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(InstantRematchEvent, type, action, previousMatchId, nextMatchId, resultFrame, loserSide, reason);
 
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(PreBattleSetChara, type, chara);
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(DirectOffer, type, ip, port, localIp, localPort);
@@ -505,7 +550,14 @@ namespace sf4e {
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(StateSnapshot::CharaStateSnapshot, status, rootPos, side, vit, vitmax, revenge, revengemax, recoverable, recoverablemax, super, supermax, sctimeamt, sctimemax, uctime, uctimemax, damage, combodamage, action, actionFrame, posture, timeScale);
 		// (StateSnapshot itself is defined below with battleFlow included.)
 		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(StateSnapshot, frameIdx, battleFlow, battleFlowSubstate, gmChunks, chara);
-		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(BattleSnapshot, type, snapshot);
+		inline void to_json(nlohmann::json& j, const BattleSnapshot& m) {
+			j = nlohmann::json{ {"type", m.type}, {"snapshot", m.snapshot}, {"matchId", m.matchId} };
+		}
+		inline void from_json(const nlohmann::json& j, BattleSnapshot& m) {
+			j.at("type").get_to(m.type);
+			j.at("snapshot").get_to(m.snapshot);
+			m.matchId = j.value("matchId", uint64_t(0));
+		}
 
 		// Names every snapshot field that differs between two states, with both
 		// values. One place, used by the online desync report and the local sync
@@ -523,7 +575,7 @@ namespace sf4e {
 		// are (battle flow), as opposed to what happened in it. Never ends a
 		// match by itself; it classifies the cause. See the implementation.
 		bool SnapshotFlowDiffers(const StateSnapshot& a, const StateSnapshot& b);
-		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(BattleLoaded, type);
-		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(BattleSynced, type);
+		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(BattleLoaded, type, matchId);
+		NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(BattleSynced, type, matchId);
 	}
 }

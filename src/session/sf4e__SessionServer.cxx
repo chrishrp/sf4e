@@ -76,6 +76,7 @@ SessionServer::SessionServer(std::string identity, std::string sidecarHash, bool
 	_lobbyData.roundCount = roundCount;
 	_lobbyData.roundTime = roundTime;
 	_lobbyData.roomScoresAvailable = true;
+	_lobbyData.instantRematchAvailable = true;
 	clients.reserve(MAX_SF4E_PROTOCOL_USERS + 1);
 	_pollGroup = _interface->CreatePollGroup();
 }
@@ -150,6 +151,25 @@ int SessionServer::PlayerCount() const {
 }
 
 void SessionServer::OnMembershipChanged() {
+	// A retained spectator is part of the restoration barrier too. A late
+	// spectator is not; it still waits for the next normally loaded match.
+	for (uint64_t participant : _instantRematch.Participants()) {
+		bool present = false;
+		for (const auto& member : clients) if (member.data.roomMemberId == participant) present = true;
+		if (!present) {
+			const auto& retained = _instantRematch.Participants();
+			const bool playerLeft = retained.size() >= 2 && (participant == retained[0] || participant == retained[1]);
+			// A spectator may leave after the replacement is already fighting.
+			// That only disables its unopened rematch barrier; it must not void
+			// the players' current game. Explicit startup failure still cancels
+			// the committed epoch through restartPending in the wire request.
+			if (playerLeft && _instantRematchCommit.Next() == _roomScores.ActiveMatchId()
+				&& _instantRematchCommit.CanCancel(_roomScores.ActiveMatchId(), participant, true, NowMs()))
+				AbortCommittedInstantRematch();
+			else HandleInstantRematchAction(_instantRematch.Fail("participant_left"));
+			break;
+		}
+	}
 	// Leaving mid-match cancels its result entitlement. A new player in the
 	// same seat or a recycled connection handle must never inherit that loss.
 	if (_roomScores.ActiveMatchId() != 0 && (PlayerCount() != 2
@@ -296,6 +316,8 @@ void SessionServer::SetSidecarHash(const std::string& hash) {
 }
 
 void SessionServer::ResetLobby() {
+	_instantRematch.Reset();
+	_instantRematchCommit.Reset();
 	_matchData.Clear();
 	_roomScores.Cancel();
 	_matchStartMs = 0;
@@ -314,6 +336,7 @@ int SessionServer::Step()
 	int numMsgs = _interface->ReceiveMessagesOnPollGroup(_pollGroup, pIncomingMsgs, SESSION_SERVER_MAX_MESSAGES_PER_POLL);
 	bool bSendLobbyAllReady = false;
 	bool bSendBattleSynced = false;
+	uint64_t battleSyncedMatchId = 0;
 
 	if (numMsgs < 0) {
 		spdlog::error("Session server error checking for messages: {}", numMsgs);
@@ -484,6 +507,7 @@ int SessionServer::Step()
 				// A reported fork aborts the match on both clients. Even if P1
 				// had already reached a result screen, it must not award a win.
 				_roomScores.MarkInconclusive();
+				HandleInstantRematchAction(_instantRematch.Fail("desync"));
 				report.diff = report.diff.substr(0, 512);
 				msg = report;
 				// Recorded like any other statistic: no name, no address. The
@@ -607,6 +631,10 @@ int SessionServer::Step()
 				_dataDirty = true;
 			}
 			else if (type == SessionProtocol::MT_BATTLE_LOADED) {
+				SessionProtocol::BattleLoaded loaded;
+				try { msg.get_to(loaded); } catch (const json::exception&) { continue; }
+				if (loaded.matchId == 0 || loaded.matchId != _roomScores.ActiveMatchId()
+					|| _instantRematch.State() == InstantRematch::Preparing) continue;
 				bSendBattleSynced = true;
 				// Only the players gate the start. A spectator that is slow, or
 				// never loads, is handled by GGPO on P1's side with a deadline.
@@ -618,6 +646,7 @@ int SessionServer::Step()
 						bSendBattleSynced = bSendBattleSynced && (clients.at(i).data.flags & SessionProtocol::MF_BATTLE_LOADED);
 					}
 				}
+				if (bSendBattleSynced) battleSyncedMatchId = loaded.matchId;
 				_dataDirty = true;
 			}
 			else if (type == SessionProtocol::MT_LOBBY_READY) {
@@ -683,16 +712,51 @@ int SessionServer::Step()
 
 				HandleResults(conn, request);
 			}
+			else if (type == SessionProtocol::MT_REMATCH_REQUEST || type == SessionProtocol::MT_REMATCH_ACK
+				|| type == SessionProtocol::MT_REMATCH_CANCEL) {
+				uint64_t memberId = 0;
+				for (const auto& member : clients) if (member.conn == conn) memberId = member.data.roomMemberId;
+				if (!memberId || (type != SessionProtocol::MT_REMATCH_CANCEL && !_instantRematch.Contains(memberId))) continue;
+				try {
+					InstantRematch::Action action = InstantRematch::None;
+					if (type == SessionProtocol::MT_REMATCH_REQUEST) {
+						const auto request = msg.get<SessionProtocol::InstantRematchRequest>();
+						if (_roomScores.IsInconclusive() || request.matchId != _roomScores.ActiveMatchId()) continue;
+						if (request.matchId == _instantRematchCommit.Next() && request.resultFrame >= 0
+							&& request.loserSide >= -1 && request.loserSide <= 1) _instantRematchCommit.Reset();
+						action = _instantRematch.Request(request.matchId, memberId, request.resultFrame, request.loserSide, NowMs());
+					}
+					else if (type == SessionProtocol::MT_REMATCH_ACK) {
+						const auto ack = msg.get<SessionProtocol::InstantRematchAck>();
+						action = _instantRematch.Ack(ack.matchId, memberId, NowMs());
+					}
+					else {
+						const auto cancel = msg.get<SessionProtocol::InstantRematchCancel>();
+						if (_instantRematchCommit.Next() == _roomScores.ActiveMatchId()
+							&& _instantRematchCommit.CanCancel(cancel.matchId, memberId, cancel.restartPending, NowMs())) {
+							AbortCommittedInstantRematch();
+							continue;
+						}
+						action = _instantRematch.Cancel(cancel.matchId, memberId);
+					}
+					HandleInstantRematchAction(action);
+				}
+				catch (const json::exception&) { continue; }
+			}
 			else if (type == SessionProtocol::MT_BATTLE_SNAPSHOT) {
+				uint64_t snapshotMatch = 0;
+				try { snapshotMatch = msg.value("matchId", uint64_t(0)); } catch (const json::exception&) { continue; }
+				if (!snapshotMatch || snapshotMatch != _roomScores.ActiveMatchId()
+					|| _instantRematch.State() == InstantRematch::Preparing) continue;
 				// Forward the snapshot to every other client. Spectators only
 				// listen: their state must never end a players' match.
-				bool fromSpectator = false;
+				bool fromPlayer = false;
 				for (auto clientIter = clients.begin(); clientIter != clients.end(); clientIter++) {
-					if (clientIter->conn == conn && clientIter->data.spectator) {
-						fromSpectator = true;
+					if (clientIter->conn == conn && !clientIter->data.spectator) {
+						fromPlayer = true;
 					}
 				}
-				for (auto clientIter = clients.begin(); clientIter != clients.end() && !fromSpectator; clientIter++) {
+				for (auto clientIter = clients.begin(); clientIter != clients.end() && fromPlayer; clientIter++) {
 					if (clientIter->conn != conn) {
 						_interface->SendMessageToConnection(
 							clientIter->conn, (const char*)pIncomingMsg->m_pData, pIncomingMsg->m_cbSize,
@@ -717,6 +781,7 @@ int SessionServer::Step()
 	// Any pick whose owner no longer occupies that seat is dropped before it
 	// can reach a client.
 	DropCharaFromVacatedSeats();
+	HandleInstantRematchAction(_instantRematch.Tick(NowMs()));
 
 	// Cheap and guarded: pairs the two players as soon as both have offered,
 	// whatever order the offers and the join happened to arrive in.
@@ -747,6 +812,7 @@ int SessionServer::Step()
 			}
 			updateMsg.lobbyData.members.push_back(clientIter->data);
 		}
+		BeginInstantRematch();
 		BroadcastMessage(json(updateMsg));
 		BroadcastMessage(json(SessionProtocol::LobbyAllReady()));
 
@@ -771,8 +837,11 @@ int SessionServer::Step()
 		});
 	}
 
-	if (bSendBattleSynced) {
-		BroadcastMessage(json(SessionProtocol::BattleSynced()));
+	if (bSendBattleSynced && battleSyncedMatchId == _matchData.matchId
+		&& _instantRematch.State() != InstantRematch::Preparing) {
+		SessionProtocol::BattleSynced synced;
+		synced.matchId = _matchData.matchId;
+		if (synced.matchId != 0) BroadcastMessage(json(synced));
 	}
 
 	return 0;
@@ -1066,6 +1135,97 @@ void SessionServer::LogStat(const std::string& event, const nlohmann::json& fiel
 	fclose(f);
 }
 
+void SessionServer::BeginInstantRematch() {
+	_instantRematchCommit.Reset();
+	std::vector<uint64_t> participants;
+	for (const auto& member : clients) {
+		if (!member.data.spectator || member.data.watching) participants.push_back(member.data.roomMemberId);
+	}
+	_instantRematch.Begin(_matchData.matchId, participants);
+}
+
+void SessionServer::HandleInstantRematchAction(InstantRematch::Action action) {
+	if (action == InstantRematch::None) return;
+	const std::vector<uint64_t> participants = _instantRematch.Participants();
+	SessionProtocol::InstantRematchEvent event;
+	event.previousMatchId = _instantRematch.MatchId();
+	event.resultFrame = _instantRematch.ResultFrame();
+	event.loserSide = _instantRematch.LoserSide();
+	event.action = action == InstantRematch::Prepare ? SessionProtocol::IR_PREPARE
+		: action == InstantRematch::Start ? SessionProtocol::IR_START : SessionProtocol::IR_ABORT;
+	event.reason = _instantRematch.Reason();
+	if (action != InstantRematch::Abort && (PlayerCount() != 2 || participants.size() < 2
+		|| clients[0].data.roomMemberId != participants[0] || clients[1].data.roomMemberId != participants[1]
+		|| _roomScores.ActiveMatchId() != event.previousMatchId || _roomScores.IsInconclusive()
+		|| !_matchData.IsAllReady())) {
+		event.action = SessionProtocol::IR_ABORT;
+		event.reason = "state_changed";
+	}
+	if (event.action == SessionProtocol::IR_START) {
+		// Both players agreed on the confirmed result and every retained
+		// observer restored its own state. Count the old game exactly once,
+		// keep seats/resources, and give fresh GGPO a distinct server epoch.
+		if (!_roomScores.Finish(event.previousMatchId, participants[0], event.loserSide,
+			participants[0], participants[1], clients[0].data.roomScore, clients[1].data.roomScore)) {
+			event.action = SessionProtocol::IR_ABORT;
+			event.reason = "result_rejected";
+		}
+		else {
+			const uint64_t now = NowMs();
+			if (_matchStartMs != 0) LogStat("match_end", {
+				{"seconds", (int)((now - _matchStartMs) / 1000)}, {"spectators", SpectatorCount()},
+				{"reported", true}, {"decisive", event.loserSide >= 0}, {"instant_rematch", true} });
+			event.nextMatchId = _roomScores.Begin(participants[0], participants[1]);
+			_matchData.matchId = event.nextMatchId;
+			_matchStartMs = now;
+			_desyncReports = 0;
+			ResetBattleSync();
+			_dataDirty = true;
+			LogStat("match_start", { {"players", 2}, {"spectators", (int)participants.size() - 2}, {"instant_rematch", true} });
+		}
+	}
+	// Late spectators have no retained start state or old GGPO stream. They
+	// never receive a prepare/start, and remain waiting for a normal match.
+	for (const auto& member : clients) {
+		for (uint64_t participant : participants) {
+			if (member.data.roomMemberId == participant) { Respond(member.conn, json(event)); break; }
+		}
+	}
+	if (event.action == SessionProtocol::IR_START) {
+		_instantRematchCommit.Begin(event.previousMatchId, event.nextMatchId, participants, NowMs());
+		_instantRematch.Begin(event.nextMatchId, participants);
+	}
+	else if (event.action == SessionProtocol::IR_ABORT) _instantRematch.Reset();
+}
+
+void SessionServer::AbortCommittedInstantRematch() {
+	SessionProtocol::InstantRematchEvent event;
+	event.action = SessionProtocol::IR_ABORT;
+	event.previousMatchId = _instantRematchCommit.Previous();
+	event.nextMatchId = _instantRematchCommit.Next();
+	event.reason = "startup_cancelled";
+	for (const auto& member : clients) {
+		for (uint64_t participant : _instantRematchCommit.Participants()) {
+			if (member.data.roomMemberId == participant) { Respond(member.conn, json(event)); break; }
+		}
+	}
+	// The preceding game's win was already counted at Start. Its replacement
+	// never got through startup, so it contributes neither a win nor a loss.
+	_roomScores.Cancel();
+	_matchData.matchId = 0;
+	_matchData.readyMessageNum[0] = _matchData.readyMessageNum[1] = -1;
+	_matchData.inputDelay[0] = _matchData.inputDelay[1] = -1;
+	for (auto& member : clients) member.data.watching = false;
+	ResetBattleSync();
+	if (_matchStartMs != 0) LogStat("match_end", {
+		{"seconds", (int)((NowMs() - _matchStartMs) / 1000)}, {"spectators", SpectatorCount()},
+		{"reported", false}, {"instant_rematch", true} });
+	_matchStartMs = 0;
+	_instantRematch.Reset();
+	_instantRematchCommit.Reset();
+	_dataDirty = true;
+}
+
 void SessionServer::HandleResults(HSteamNetConnection reporter, const SessionProtocol::LobbyReportResults& result) {
 	if (PlayerCount() != 2 || !_matchData.IsAllReady()) return;
 	uint64_t reporterId = 0;
@@ -1079,6 +1239,8 @@ void SessionServer::HandleResults(HSteamNetConnection reporter, const SessionPro
 		spdlog::debug("Server: ignored unauthorized, duplicate or stale result for match {}", result.matchId);
 		return;
 	}
+	HandleInstantRematchAction(_instantRematch.Fail("normal_exit"));
+	_instantRematchCommit.Reset();
 	_matchData.matchId = 0;
 	_dataDirty = true;
 	// A result arrived, so the match finished rather than being abandoned.

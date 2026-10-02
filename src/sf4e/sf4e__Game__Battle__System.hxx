@@ -102,12 +102,29 @@ namespace sf4e {
 
 				void BattleUpdate();
 				void CloseBattle();
+				// Opt-in loaded-battle rematches. Network actions run from the main
+				// application pump, never from a GGPO save/load/advance callback.
+				static void StepInstantRematch();
+				static bool InstantRematchResultVisible();
+				static bool InstantRematchResultConfirmed();
+				static bool InstantRematchVoteSent();
+				static bool InstantRematchPreparing();
+				static bool InstantRematchRestarting();
+				static int InstantRematchWinner();
+				static const char* InstantRematchStatus();
+				static void VoteInstantRematch();
+				static void ExitInstantRematch();
+				static void OnInstantRematchKeyReleased(Dimps::Game::GameMementoKey* key);
+				static void OnInstantRematchKeyInitialized(Dimps::Game::GameMementoKey* key, void* owner);
 				static void OnBattleFlow_BattleStart(System* s);
 				void SysMain_HandleTrainingModeFeatures();
 				void SysMain_UpdatePauseState();
 
 				struct SaveState {
 					bool used = false;
+					// Frame at the START of this GGPO state (last simulated = frame-1).
+					int transportFrame = 0;
+					int instantResultFrame = -1;
 					// False while the records point at payloads the engine owns: a scratch
 					// copy around a release, or a slot reclaimed after teardown. Clear then
 					// drops the records without calling into the engine.

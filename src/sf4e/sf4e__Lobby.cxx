@@ -39,6 +39,7 @@ namespace rBattle = Dimps::Game::Battle;
 using rVsMode = Dimps::GameEvents::VsMode;
 using rPad = Dimps::Pad::System;
 using fUserApp = sf4e::UserApp;
+using fBattleSystem = sf4e::Game::Battle::System;
 
 namespace {
 	// ---------------------------------------------------------------- look
@@ -79,6 +80,15 @@ namespace {
 	int g_resultChara[2] = { -1, -1 };
 	int g_mySideAtResult = -1;   // sides can rotate after reporting; keep ours
 	int g_resultCursor = 0;
+	// Choosing an exit from the frozen battle must not destroy netplay until
+	// the engine has completed its normal transition back to the main menu.
+	enum InstantResultExit { IR_STAY, IR_CHANGE_CHARACTER, IR_LEAVE_LOBBY };
+	InstantResultExit g_instantResultExit = IR_STAY;
+	bool g_instantResultShown = false;
+	bool g_instantResultConfirmed = false;
+	bool g_instantResultReleaseLatch = true;
+	bool g_instantResumeReleaseLatch = false;
+	int g_instantResultCursor = 0;
 
 
 	bool g_open = false;
@@ -301,6 +311,22 @@ namespace {
 	int g_heldDir = -1;
 
 	bool KeyDown(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }
+
+	bool InstantResultInputHeld() {
+		XINPUT_STATE xs;
+		for (DWORD i = 0; i < 4; ++i) {
+			if (XInputGetState(i, &xs) != ERROR_SUCCESS) continue;
+			const auto& pad = xs.Gamepad;
+			if (pad.wButtons || pad.bLeftTrigger > XINPUT_GAMEPAD_TRIGGER_THRESHOLD ||
+				pad.bRightTrigger > XINPUT_GAMEPAD_TRIGGER_THRESHOLD ||
+				std::abs(pad.sThumbLX) > 16000 || std::abs(pad.sThumbLY) > 16000) return true;
+		}
+		const int keys[] = { VK_RETURN, VK_SPACE, VK_ESCAPE, VK_BACK, VK_F1,
+			VK_UP, VK_DOWN, VK_LEFT, VK_RIGHT, VK_TAB, VK_PRIOR, VK_NEXT,
+			VK_LBUTTON, VK_RBUTTON, VK_MBUTTON };
+		for (int key : keys) if (KeyDown(key)) return true;
+		return false;
+	}
 
 	// XInput and GetAsyncKeyState report the devices regardless of which
 	// window is active, so without this a message typed into Discord with the
@@ -1140,6 +1166,126 @@ namespace {
 		}
 	}
 
+	void DrawInstantResult() {
+		const bool confirmed = fBattleSystem::InstantRematchResultConfirmed();
+		const bool preparing = fBattleSystem::InstantRematchPreparing();
+		const bool voted = fBattleSystem::InstantRematchVoteSent();
+		if (!g_instantResultShown) {
+			g_instantResultShown = true;
+			g_instantResultConfirmed = false;
+			g_instantResultReleaseLatch = true;
+			g_instantResultCursor = 0;
+			g_hadFocus = false;
+		}
+		// Confirmation may arrive while a button is held. Require a fresh
+		// release after it, even if the provisional result was already visible.
+		if (confirmed && !g_instantResultConfirmed) g_instantResultReleaseLatch = true;
+		g_instantResultConfirmed = confirmed;
+		const bool focus = GameHasFocus();
+		if (!focus) g_instantResultReleaseLatch = true;
+		Input in = ReadInput();
+		bool click = focus && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+		if (g_instantResultReleaseLatch) {
+			if (focus && !InstantResultInputHeld()) g_instantResultReleaseLatch = false;
+			in = Input();
+			click = false;
+		}
+		ImGuiIO& io = ImGui::GetIO();
+		const ImVec2 display = io.DisplaySize;
+		const ImVec2 ds(1600, 1000);
+		const float scale = (std::min)(display.x / ds.x, display.y / ds.y);
+		if (scale <= 0) return;
+		const ImVec2 offset((display.x - ds.x * scale) * .5f, (display.y - ds.y * scale) * .5f);
+		const ImVec2 mouse((io.MousePos.x - offset.x) / scale, (io.MousePos.y - offset.y) / scale);
+		ImGui::SetNextWindowPos(ImVec2(0, 0));
+		ImGui::SetNextWindowSize(display);
+		ImGui::SetNextWindowBgAlpha(0.0f);
+		ImGui::Begin("##sf4e-instant-result", nullptr,
+			ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+			ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNav);
+		ImDrawList* dl = ImGui::GetWindowDrawList();
+		dl->AddRectFilled(ImVec2(0, 0), display, IM_COL32(0, 0, 0, 80));
+		const int firstVertex = dl->VtxBuffer.Size;
+		dl->PushClipRect(ImVec2(0, 0), ImVec2((std::max)(display.x, ds.x), (std::max)(display.y, ds.y)), false);
+		const float height = g_spectate ? 320.0f : 445.0f;
+		const float top = (ds.y - height) * .5f;
+		const float left = 510.0f, right = 1090.0f, center = 800.0f;
+		dl->AddRectFilled(ImVec2(left, top), ImVec2(right, top + height), IM_COL32(12, 13, 18, 246), 5);
+		dl->AddRect(ImVec2(left, top), ImVec2(right, top + height), CARD_EDGE, 5);
+		dl->AddRectFilled(ImVec2(left, top), ImVec2(right, top + 4), RED);
+
+		const int winner = fBattleSystem::InstantRematchWinner();
+		const int mySide = fUserApp::netplay ? fUserApp::netplay->client.ActiveMatchSide() : -1;
+		const char* verdict = "Match over";
+		ImU32 verdictColor = PAPER;
+		if (confirmed) {
+			if (winner < 0) verdict = "Draw";
+			else if (g_spectate) { verdict = winner == 0 ? "P1 wins" : "P2 wins"; verdictColor = GOLD; }
+			else if (mySide >= 0) { verdict = winner == mySide ? "You win" : "You lose"; verdictColor = winner == mySide ? GOLD : RED; }
+		}
+		TextCentered(dl, g_fontHead, 48, center, top + 24, verdict, verdictColor, false);
+		if (fUserApp::netplay && fUserApp::netplay->client._lobbyData.roomScoresAvailable) {
+			for (int side = 0; side < 2; ++side) {
+				const auto* player = PlayerAt(side);
+				if (!player) continue;
+				const char* label = g_spectate ? (side == 0 ? "P1" : "P2") : (side == MySide() ? "You" : "Opponent");
+				char record[128];
+				snprintf(record, sizeof(record), "%s   %llu W / %llu L", label,
+					(unsigned long long)player->roomScore.wins, (unsigned long long)player->roomScore.losses);
+				TextCentered(dl, g_fontBody, 23, center, top + 93 + side * 29, record, PAPER_DIM, false);
+			}
+		} else {
+			TextCentered(dl, g_fontSmall, 22, center, top + 108, "Room score unavailable", PAPER_DIM, false);
+		}
+
+		const int count = g_spectate ? 1 : 3;
+		const bool exiting = g_instantResultExit != IR_STAY;
+		if (!exiting && !preparing) {
+			if (in.up) g_instantResultCursor = (g_instantResultCursor + count - 1) % count;
+			if (in.down) g_instantResultCursor = (g_instantResultCursor + 1) % count;
+		}
+		int action = -1;
+		const char* labels[] = { voted ? "Rematch requested" : "Rematch", "Change character", "Leave lobby" };
+		for (int i = 0; i < count; ++i) {
+			const int index = g_spectate ? 2 : i;
+			const bool enabled = !exiting && !preparing && (index != 0 || (confirmed && !voted));
+			const float y = top + 168 + i * 58;
+			const bool hovered = focus && mouse.x >= left + 36 && mouse.x <= right - 36 && mouse.y >= y && mouse.y <= y + 48;
+			if (hovered && enabled && click) { g_instantResultCursor = i; action = index; }
+			const bool selected = g_instantResultCursor == i;
+			dl->AddRectFilled(ImVec2(left + 36, y), ImVec2(right - 36, y + 48),
+				selected && enabled ? RED : IM_COL32(255, 255, 255, enabled ? 18 : 8), 3);
+			TextCentered(dl, g_fontBody, 26, center, y + 8, labels[index],
+				enabled ? PAPER : IM_COL32(140, 138, 134, 255), false);
+		}
+		const char* status = exiting ? "Returning to lobby" : preparing ? "Synchronizing rematch" :
+			g_spectate ? "Waiting for players" : fBattleSystem::InstantRematchStatus();
+		if (status && *status) {
+			const float width = right - left - 64;
+			const ImVec2 size = g_fontSmall->CalcTextSizeA(20, FLT_MAX, width, status);
+			dl->AddText(g_fontSmall, 20, ImVec2(center - size.x * .5f, top + height - 55), PAPER_DIM, status, nullptr, width);
+		}
+		for (int i = firstVertex; i < dl->VtxBuffer.Size; ++i) {
+			auto& p = dl->VtxBuffer[i].pos;
+			p = ImVec2(p.x * scale + offset.x, p.y * scale + offset.y);
+		}
+		dl->PopClipRect();
+		ImGui::End();
+
+		// Once this client acknowledges preparation, Start may already be in
+		// flight for a new match ID. Finish the bounded handshake before exit.
+		if (exiting || preparing) return;
+		if (in.confirm) action = g_spectate ? 2 : g_instantResultCursor;
+		if (in.start && !g_spectate) action = 0;
+		if (in.back) action = 2;
+		if (action == 0 && confirmed && !preparing && !voted && !g_spectate) {
+			fBattleSystem::VoteInstantRematch();
+		} else if (action == 1 || action == 2) {
+			g_instantResultExit = action == 1 ? IR_CHANGE_CHARACTER : IR_LEAVE_LOBBY;
+			fBattleSystem::ExitInstantRematch();
+		}
+	}
+
 	void PublishSelection() {
         if (!fUserApp::netplay || g_sentReady || g_spectate) return;
         auto& c = fUserApp::netplay->client;
@@ -1379,6 +1525,11 @@ void sf4e::Lobby::Open() {
 	if (g_open) return;
 	g_open = true;
 	g_hiddenForBattle = false;
+	g_instantResultExit = IR_STAY;
+	g_instantResultShown = false;
+	g_instantResultConfirmed = false;
+	g_instantResultReleaseLatch = true;
+	g_instantResumeReleaseLatch = false;
 	g_screen = (g_deviceIdx == 0xff) ? SC_CAPTURE : SC_HOME;
 	g_serverStatus = -1;
 	g_pingInFlight = false;
@@ -1447,6 +1598,29 @@ void sf4e::Lobby::OnMatchResult(int winnerSide, int charaP1, int charaP2) {
 	spdlog::info("Lobby: match over, winner side {} (me: side {})", winnerSide, g_mySideAtResult);
 }
 
+void sf4e::Lobby::OnInstantRematchStarted() {
+	g_hasResult = false;
+	g_resultWinner = -1;
+	g_resultChara[0] = g_resultChara[1] = -1;
+	g_mySideAtResult = -1;
+	g_resultCursor = 0;
+	g_instantResultExit = IR_STAY;
+	g_instantResultShown = false;
+	g_instantResultConfirmed = false;
+	g_instantResultReleaseLatch = true;
+	g_instantResultCursor = 0;
+	g_sentReady = false;
+	g_selectionPublished = false;
+	g_lastPublishedSide = -1;
+	g_lastPublishedStage = -1;
+	g_screen = SC_LOBBY;
+	// Remain hidden throughout the loaded battle. A final rematch-confirm
+	// press must also be released before the fighters receive local input.
+	g_hiddenForBattle = g_open;
+	g_instantResumeReleaseLatch = g_open;
+	if (g_open) SetSuppress(true);
+}
+
 void sf4e::Lobby::Draw() {
 	if (!g_open) {
 		if (g_releaseLatch) {
@@ -1461,10 +1635,24 @@ void sf4e::Lobby::Draw() {
 	bool menu = OnMainMenu();
 	if (!menu) {
 		if (!g_hiddenForBattle) { g_hiddenForBattle = true; SetSuppress(g_spectate); }
+		if (fBattleSystem::InstantRematchResultVisible() || g_instantResultExit != IR_STAY) {
+			SetSuppress(true);
+			DrawInstantResult();
+		} else {
+			g_instantResultShown = false;
+			g_instantResultConfirmed = false;
+			if (g_instantResumeReleaseLatch && !InstantResultInputHeld()) g_instantResumeReleaseLatch = false;
+			SetSuppress(g_spectate || g_instantResumeReleaseLatch);
+		}
 		return;
 	}
 	if (g_hiddenForBattle) {
 		g_hiddenForBattle = false;
+		g_instantResultShown = false;
+		g_instantResultConfirmed = false;
+		g_instantResultReleaseLatch = true;
+		g_instantResumeReleaseLatch = false;
+		g_hadFocus = false;
 		SetSuppress(true);
 		g_sentReady = false;
 		// Soak: do not ready up the instant we land back in the lobby. The
@@ -1515,6 +1703,18 @@ void sf4e::Lobby::Draw() {
 		g_screen = SC_LOBBY;
 		g_lobbyRow = 2;
 		Flash("Lost connection to the server. Create or join a lobby again.");
+	}
+
+	// Only the normal main-menu transition may tear down the session. This
+	// runs after result reporting and connection-loss cleanup above.
+	if (g_instantResultExit != IR_STAY) {
+		const InstantResultExit action = g_instantResultExit;
+		g_instantResultExit = IR_STAY;
+		g_hasResult = false;
+		g_sentReady = false;
+		g_lobbyRow = 0;
+		if (action == IR_LEAVE_LOBBY) LeaveLobby();
+		else g_screen = fUserApp::netplay ? SC_LOBBY : SC_HOME;
 	}
 
 	// Soak test: nobody is sitting at either PC, so ready up on our own and

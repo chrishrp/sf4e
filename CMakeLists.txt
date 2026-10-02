@@ -2,7 +2,7 @@ cmake_minimum_required (VERSION 3.21)
 
 project (
     sf4e
-    VERSION 1.1.0
+    VERSION 1.2.0
     DESCRIPTION "A process-inspection and modification tool for the Steam release of Ultra Street Fighter 4."
     HOMEPAGE_URL "https://github.com/chrishrp/sf4e"
 )
@@ -29,6 +29,7 @@ if(WIN32)
     find_library(LIB_DETOURS "detours")
     find_package(CLI11 CONFIG REQUIRED)
     find_package(ggpo CONFIG REQUIRED)
+    find_path(GGPO_INCLUDE_DIR ggponet.h REQUIRED)
     find_package(imgui CONFIG REQUIRED)
     find_package(protobuf CONFIG REQUIRED)
     find_package(ZLIB REQUIRED)
@@ -173,10 +174,26 @@ if(BUILD_TESTING)
     add_test(NAME LobbyCatalog COMMAND LobbyCatalogTest)
     add_executable(RoomScoreTest tests/room_score_test.cxx)
     add_test(NAME RoomScore COMMAND RoomScoreTest)
+    add_executable(InstantRematchTest tests/instant_rematch_test.cxx)
+    add_test(NAME InstantRematch COMMAND InstantRematchTest)
+    add_executable(InstantRematchServerTest tests/instant_rematch_server_test.cxx)
+    target_link_libraries(InstantRematchServerTest PRIVATE Session)
+    if(WIN32)
+        target_link_libraries(InstantRematchServerTest PRIVATE ws2_32)
+    endif()
+    add_test(NAME InstantRematchServer COMMAND InstantRematchServerTest)
+    set_tests_properties(InstantRematchServer PROPERTIES TIMEOUT 30)
+    add_executable(MatchOutcomeTest tests/match_outcome_test.cxx)
+    add_test(NAME MatchOutcome COMMAND MatchOutcomeTest)
     add_executable(RoomProtocolTest tests/room_protocol_test.cxx)
     target_link_libraries(RoomProtocolTest PRIVATE Session)
     add_test(NAME RoomProtocol COMMAND RoomProtocolTest)
     if(WIN32)
+        add_executable(GgpoRematchTest tests/ggpo_rematch_test.cxx)
+        target_include_directories(GgpoRematchTest PRIVATE ${GGPO_INCLUDE_DIR})
+        target_link_libraries(GgpoRematchTest PRIVATE ggpo::GGPO)
+        add_test(NAME GgpoRematch COMMAND GgpoRematchTest)
+        set_tests_properties(GgpoRematch PROPERTIES TIMEOUT 35)
         add_executable(PortraitArchiveTest tests/portrait_archive_test.cxx)
         target_link_libraries(PortraitArchiveTest PRIVATE PortraitArchive)
         add_test(NAME PortraitArchive COMMAND PortraitArchiveTest)
@@ -258,6 +275,8 @@ install(
     "${CMAKE_CURRENT_SOURCE_DIR}/SERVER.md"
     "${CMAKE_CURRENT_SOURCE_DIR}/server.txt"
     "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Try-Instant-Rematch.cmd"
+    "${CMAKE_CURRENT_SOURCE_DIR}/INSTANT-REMATCH-TEST.md"
   DESTINATION "."
 )
 
@@ -267,6 +286,7 @@ install(FILES
   "${CMAKE_CURRENT_SOURCE_DIR}/docs/MODDING-FEASIBILITY.md"
   "${CMAKE_CURRENT_SOURCE_DIR}/docs/LOBBY_CATALOG.md"
   "${CMAKE_CURRENT_SOURCE_DIR}/docs/PORTRAITS.md"
+  "${CMAKE_CURRENT_SOURCE_DIR}/docs/INSTANT-REMATCH.md"
   DESTINATION "docs"
 )
 

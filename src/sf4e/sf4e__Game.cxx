@@ -8,6 +8,7 @@
 #include "../Dimps/Dimps__Game.hxx"
 #include "sf4e__Game.hxx"
 #include "sf4e__Game__Battle.hxx"
+#include "sf4e__Game__Battle__System.hxx"
 
 namespace rGame = Dimps::Game;
 using rSpriteNode = Dimps::Eva::IEmSpriteNode;
@@ -34,6 +35,7 @@ void fKey::Install() {
 }
 
 void fKey::Initialize(void* mementoable, int numMementos) {
+    Battle::System::OnInstantRematchKeyInitialized(this, mementoable);
     (this->*rKey::publicMethods.Initialize)(mementoable, numMementos);
     trackedKeys.insert(this);
 }
@@ -250,6 +252,7 @@ uint32_t sf4e::Game::Hash::Mix(uint32_t h, uint32_t v) {
 }
 
 void fKey::ClearKey() {
+    Battle::System::OnInstantRematchKeyReleased(this);
     (this->*rKey::publicMethods.ClearKey)();
     trackedKeys.erase((rKey*)this);
 }
