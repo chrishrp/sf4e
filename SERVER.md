@@ -14,6 +14,10 @@ Renting a new server is not required when an existing compatible one is availabl
 
 ## Before you start
 
+For a private two-PC trial, you can host on your gaming PC over Tailscale;
+see the Windows test instructions below. The public-server deployment steps
+are for a service that should stay available to a larger group.
+
 **Pick a machine.** A rented Linux VPS is the right choice: it has a fixed
 public IP, sits on a fast network, and stays up. One core and 1 GB of RAM are
 enough to run it. Building it needs about 2 GB of RAM and a few GB of disk; a
@@ -70,6 +74,39 @@ To update, pull the repository, run the two scripts again, and tell your
 players to update too: a lobby only accepts the build it was created with.
 
 ## Install on Windows
+
+### Private test with Tailscale
+
+1. Install [Tailscale](https://tailscale.com/docs/install/windows) on both PCs
+   and connect them to the same private network. If the other player uses
+   their own account, [share your host machine](https://tailscale.com/docs/features/sharing)
+   with them. No router port forwarding is needed for this route.
+2. Extract the same preview package on both PCs. On the host, double-click
+   `Host-Rematch-Test.cmd`. It starts this package's server in the background,
+   checks its response, then opens the game with instant rematches enabled.
+   It connects your game to `127.0.0.1:23400` automatically.
+3. On the other PC, launch `SF4Enhanced.exe --server HOST_IP:23400 --instant-rematch`,
+   replacing `HOST_IP` with the host's Tailscale IPv4 address (shown by
+   `tailscale ip -4`). A Windows shortcut can save these arguments; no
+   `server.txt` is necessary. Both games must use this host rather than a
+   built-in public server.
+4. Permit the host's `LobbyServer.exe` through Windows Firewall for UDP
+   `23400-23420`, `24001-24020`, and `25001-25080` on the Tailscale interface.
+   Restrict the remote address to the other PC's Tailscale address, or
+   `100.64.0.0/10` for your Tailscale peers. The launch scripts do not change
+   firewall rules. Tailscale's access policy must also permit the connection.
+5. For the first trial, choose **Server relay** on the lobby home screen on
+   both PCs, then create/join a room normally. This exercises the rematch
+   handshake through the private network without a separate direct path.
+
+The host PC and its server must stay running throughout the test. Closing the
+game leaves the server available; `Stop-Rematch-Test.cmd` stops the server
+started by that folder's launcher. Logs are in `test-server-logs` next to the
+launcher. The host script can also be run with `-ServerOnly` to start the
+server without opening USF4. A successful local status check does not prove
+the other PC can connect; verify that from the other PC before playing.
+
+### Standalone server
 
 The combined arcade-lobby package includes `LobbyServer.exe` and its runtime
 DLLs. Run it from a console on a machine reachable by the players:

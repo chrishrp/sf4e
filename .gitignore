@@ -2,6 +2,7 @@
 /.tools/
 /vcpkg_installed/
 /out/
+/test-server-logs/
 __pycache__/
 *.pyc
 /msvc-build

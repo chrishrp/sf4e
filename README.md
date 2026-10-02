@@ -4,10 +4,16 @@ A process-inspection and modification tool for the Steam release of _Ultra Stree
 
 ## Experimental instant rematch
 
-The `feature/instant-rematch` branch contains an opt-in 1.2.0 prototype that
+The `feature/instant-rematch` branch contains an experimental 1.2.0 prototype that
 keeps the battle loaded and starts a fresh synchronized GGPO session after
 both players accept. See [the two-PC test guide](INSTANT-REMATCH-TEST.md) and
 [the GGPO design and validation notes](docs/INSTANT-REMATCH.md).
+
+Preview builds can enable the experiment on double-click. The chosen server
+must also support it; older public servers retain ordinary rematches. For a
+private internet test hosted on a player's PC, use the
+[Tailscale instructions](SERVER.md#private-test-with-tailscale) and included
+Host/Stop test launchers.
 
 ## Arcade lobby fork
 

@@ -277,6 +277,9 @@ install(
     "${CMAKE_CURRENT_SOURCE_DIR}/SERVER.md"
     "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE"
     "${CMAKE_CURRENT_SOURCE_DIR}/Try-Instant-Rematch.cmd"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Host-Rematch-Test.cmd"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Host-Rematch-Test.ps1"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Stop-Rematch-Test.cmd"
     "${CMAKE_CURRENT_SOURCE_DIR}/INSTANT-REMATCH-TEST.md"
   DESTINATION "."
 )

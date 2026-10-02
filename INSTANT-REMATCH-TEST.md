@@ -6,6 +6,12 @@ the real USF4 state restoration still needs live validation. Keep the released
 
 ## Setup
 
+For a private internet test hosted on one player's PC, follow the
+[Tailscale setup in SERVER.md](SERVER.md#private-test-with-tailscale).
+`Host-Rematch-Test.cmd` starts the server and game on the host without a
+configuration file. The other PC uses the host's Tailscale address in its
+launcher shortcut. Then continue with **First test** below.
+
 1. Extract the same complete preview ZIP on both PCs. Keep all included DLLs.
 2. Run this package's `LobbyServer.exe` on one reachable machine. For two PCs
    on the same network, one of those PCs can host it. See `SERVER.md` for the
