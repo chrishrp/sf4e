@@ -169,6 +169,15 @@ lifetime ends, do not call `Load` or `Free` through stale addresses. The relevan
 paths are `SaveState::Save`, `Load`, `Free`, `Reclaim`, and the
 [memento key hooks](../src/sf4e/sf4e__Game.cxx).
 
+The supported game's `GameMementoKey::Initialize` first calls `ClearKey` to
+replace its previous snapshot buffer, even when `SaveState::Save` has already
+detached that buffer and zeroed the live key. This internal clear does not end
+the owner's lifetime. The hook checks owner replacement before initialization,
+then permits exactly one internal clear of that same key. Standalone clears,
+unrelated keys, subsequent clears, and invalid initialization still invalidate
+the baseline. Do not suppress all clears during saving or ignore zeroed keys:
+actual teardown can also encounter a zeroed key.
+
 Restore all gameplay state together: round/match counters, health and meters,
 flow callbacks, timers, input history, RNG, and task/memento state. Reusing the
 original baseline also reuses its RNG state; changing the seed requires an
@@ -228,9 +237,26 @@ that spectator departure preserves the current match and its scoring, both
 before and after a fast rematch. This exercises the production message handlers;
 it does not launch USF4 or the public matchmaker service.
 
-The complete native CTest suite has eight targets, including this fixture, the
+The complete native CTest suite has nine targets, including this fixture, the
 GGPO fixture below, protocol/coordinator/outcome tests, and the existing lobby,
-score and portrait tests.
+score, portrait and memento-lifecycle tests.
+
+### First live test and lifetime regression
+
+The first two-PC test completed a fight but returned to the lobby and reloaded
+the stage on rematch. Its log showed that the capability was enabled and GGPO
+was running. A frame-one baseline with 92 owners was captured and immediately
+invalidated by the next normal snapshot's internal key initialization clear.
+Disassembly of the installed supported game confirmed that call sequence.
+
+`MementoKeyLifecycleTest` models this sequence using the same scoped guard as
+the production hooks. Repeated recording and ring-buffer retirement preserve
+the detached baseline. Genuine releases, owner changes, invalid initializers,
+and nested/exception paths retain the lifetime checks. This fixes the observed
+premature fallback; it is not evidence that a complete live battle restore has
+passed. Both PCs must use the rebuilt Sidecar for the next test. Release logs
+now identify the key, owner, type and transport frame, with a separate owner
+replacement diagnostic, to make any remaining lifetime failure distinguishable.
 
 ### GGPO integration evidence
 

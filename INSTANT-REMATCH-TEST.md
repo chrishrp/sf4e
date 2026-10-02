@@ -13,6 +13,9 @@ configuration file. The other PC uses the host's Tailscale address in its
 launcher shortcut. Then continue with **First test** below.
 
 1. Extract the same complete preview ZIP on both PCs. Keep all included DLLs.
+   If updating from the first Tailscale test, replace the package on **both**
+   PCs: that build discarded its starting snapshot during routine recording,
+   so it always fell back to the lobby. The corrected build preserves it.
 2. Run this package's `LobbyServer.exe` on one reachable machine. For two PCs
    on the same network, one of those PCs can host it. See `SERVER.md` for the
    UDP ports; an Internet test needs a reachable server and the listed ports.

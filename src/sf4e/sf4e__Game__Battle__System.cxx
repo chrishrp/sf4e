@@ -610,7 +610,9 @@ void fSystem::OnInstantRematchKeyReleased(rKey* key) {
     if (!g_instant.captured) return;
     for (const auto& entry : g_instant.baseline.keys) {
         if (entry.first == key) {
-            spdlog::warn("Instant rematch: retained owner released; discarding baseline before destruction");
+            spdlog::warn("Instant rematch: retained owner released (key {}, owner {}, type {}, input {}); discarding baseline before destruction",
+                (const void*)key, entry.second.mementoableObject,
+                sf4e::Rtti::GetClassName(entry.second.mementoableObject), g_instant.frame);
             g_instant.invalidated = true;
             // A restore can run engine key callbacks. Never free the very
             // snapshot CopyIntoPlace is currently iterating over.
@@ -625,6 +627,8 @@ void fSystem::OnInstantRematchKeyInitialized(rKey* key, void* owner) {
     if (!g_instant.captured) return;
     for (const auto& entry : g_instant.baseline.keys) {
         if (entry.first == key && entry.second.mementoableObject != owner) {
+            spdlog::warn("Instant rematch: retained key owner changed (key {}, saved owner {}, incoming owner {}, input {})",
+                (const void*)key, entry.second.mementoableObject, owner, g_instant.frame);
             OnInstantRematchKeyReleased(key);
             break;
         }
@@ -661,7 +665,10 @@ void fSystem::StepInstantRematch() {
         }
         // Losing a retained owner during the fight only disables the fast
         // restart. Finish that fight normally, then leave on a settled result.
-        if (g_instant.invalidated && g_instant.confirmed) { ExitInstantRematch(); return; }
+        if (g_instant.invalidated && g_instant.confirmed) {
+            spdlog::warn("Instant rematch: returning to lobby because the retained starting state lost an owner");
+            ExitInstantRematch(); return;
+        }
         if (g_instant.confirmed && client._spectator && !g_instant.readySent) {
             int loser = g_instant.winner < 0 ? -1 : 1 - g_instant.winner;
             if (client.RequestInstantRematch(g_instant.resultFrame, loser) == k_EResultOK)
