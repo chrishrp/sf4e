@@ -16,6 +16,9 @@ launcher shortcut. Then continue with **First test** below.
    If updating from the first Tailscale test, replace the package on **both**
    PCs: that build discarded its starting snapshot during routine recording,
    so it always fell back to the lobby. The corrected build preserves it.
+   Update both PCs again if using rematch-fix1: that build could advertise a
+   host's loopback address for direct play, connecting the other PC to itself.
+   Fix2 rejects that address and uses the relay for a localhost-hosted test.
 2. Run this package's `LobbyServer.exe` on one reachable machine. For two PCs
    on the same network, one of those PCs can host it. See `SERVER.md` for the
    UDP ports; an Internet test needs a reachable server and the listed ports.

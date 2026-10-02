@@ -181,6 +181,14 @@ void fUserApp::_OnVsBattleTasksRegistered()
         else if (matchDelay != (int)netplay->delay) {
             spdlog::info("Input delay {} for this match (you chose {}; the higher choice is used for both)", matchDelay, (int)netplay->delay);
         }
+        spdlog::info("Netplay: match {}, local side {}, UDP port {}, route {}",
+            netplay->client.ActiveMatchId(), localIdx + 1, netplay->client._ggpoPort,
+            direct ? "peer to peer" : "server relay");
+        for (int i = 0; i < numPlayers; ++i) {
+            if (players[i].type == GGPO_PLAYERTYPE_REMOTE)
+                spdlog::info("Netplay: remote side {} at {}:{}", players[i].player_num,
+                    players[i].u.remote.ip_address, players[i].u.remote.port);
+        }
         fSystem::StartGGPO(
             players,
             numPlayers,
@@ -334,6 +342,7 @@ void fUserApp::Steam_PostUpdate() {
     if (fSystem::ggpo) {
         ggpo_idle(fSystem::ggpo, 1);
     }
+    fSystem::StepNetplayStartup();
     fSystem::StepInstantRematch();
     fSystem::StepPacing();
 

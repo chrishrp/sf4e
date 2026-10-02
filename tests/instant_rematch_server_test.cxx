@@ -29,6 +29,7 @@ struct Peer {
     P::ConnectionID cid;
     P::SessionDataUpdate update;
     std::vector<P::InstantRematchEvent> events;
+    std::vector<P::DirectPeer> directPeers;
     int allReady = 0, synced = 0, snapshots = 0, barrier = 0;
 
     void Send(const json& message) {
@@ -54,6 +55,7 @@ struct Peer {
             else if (type == P::MT_BATTLE_SYNCED) ++synced;
             else if (type == P::MT_BATTLE_SNAPSHOT) ++snapshots;
             else if (type == P::MT_REMATCH_EVENT) events.push_back(message.get<P::InstantRematchEvent>());
+            else if (type == P::MT_DIRECT_PEER) directPeers.push_back(message.get<P::DirectPeer>());
             else if (type == P::MT_FORWARD) barrier = message.at("msg").value("test_barrier", 0);
         }
     }
@@ -134,6 +136,34 @@ struct Room {
         return id;
     }
 };
+
+void DirectOfferSafety() {
+    Room room;
+    Peer& host = room.Join("Local host", false);
+    Peer& partner = room.Join("Remote partner", false);
+    P::DirectOffer local;
+    local.ip = local.localIp = "127.0.0.1";
+    local.port = local.localPort = 23457;
+    P::DirectOffer remote;
+    remote.ip = remote.localIp = "100.100.10.2";
+    remote.port = remote.localPort = 23457;
+    host.Send(local);
+    partner.Send(remote);
+    room.BarrierAll();
+    Require(host.directPeers.empty() && partner.directPeers.empty(),
+        "local-only host offer must keep both players on the relay");
+
+    // Even an older client with a bad public candidate can supply a usable
+    // LAN/VPN candidate. Only that reachable endpoint should reach its peer.
+    local.localIp = "100.100.10.1";
+    host.Send(local);
+    room.Until([&] { return host.directPeers.size() == 1 && partner.directPeers.size() == 1; }, "safe peer exchange timeout");
+    Require(partner.directPeers.back().ip.empty() && partner.directPeers.back().port == 0
+        && partner.directPeers.back().localIp == local.localIp && partner.directPeers.back().localPort == 23457,
+        "server forwarded a loopback candidate beside the safe local candidate");
+    Require(host.directPeers.back().ip == remote.ip && host.directPeers.back().port == remote.port,
+        "server discarded a usable VPN endpoint");
+}
 
 void Run() {
     Room room;
@@ -250,6 +280,7 @@ int main() {
     try {
         spdlog::set_level(spdlog::level::warn);
         Network network;
+        DirectOfferSafety();
         Run();
         SpectatorDeparture(false);
         SpectatorDeparture(true);

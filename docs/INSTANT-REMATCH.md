@@ -237,9 +237,9 @@ that spectator departure preserves the current match and its scoring, both
 before and after a fast rematch. This exercises the production message handlers;
 it does not launch USF4 or the public matchmaker service.
 
-The complete native CTest suite has nine targets, including this fixture, the
-GGPO fixture below, protocol/coordinator/outcome tests, and the existing lobby,
-score, portrait and memento-lifecycle tests.
+The CTest suite includes this fixture, the GGPO fixture below, transport and
+startup regressions, protocol/coordinator/outcome tests, the host launcher,
+and the existing lobby, score, portrait and memento-lifecycle tests.
 
 ### First live test and lifetime regression
 
@@ -257,6 +257,23 @@ premature fallback; it is not evidence that a complete live battle restore has
 passed. Both PCs must use the rebuilt Sidecar for the next test. Release logs
 now identify the key, owner, type and transport frame, with a separate owner
 replacement diagnostic, to make any remaining lifetime failure distinguishable.
+
+### Localhost startup regression
+
+A later two-PC test stalled before its first fight while the other player
+reported controlling both fighters. The host used its local server through
+`127.0.0.1`; endpoint discovery then offered that same loopback address to the
+other PC. A shared-token probe could answer itself there and falsely prove a
+direct connection. The host fell back to the relay while the other PC connected
+to its own game socket. This happened before a retained battle was restored.
+
+Direct candidate validation now rejects loopback and other unusable addresses,
+and the puncher rejects its own endpoints. A localhost host with no usable
+direct candidate stays on the relay. Startup timeout checks run in the
+application network pump, including while battle initialization is blocked;
+failed startup closes GGPO before leaving the battle. Each network session must
+contain exactly one local player and one remote player. A fresh two-PC test is
+still required to confirm the complete game and rematch behavior.
 
 ### GGPO integration evidence
 

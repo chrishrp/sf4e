@@ -198,7 +198,9 @@ SessionClient::~SessionClient()
 	// network from mapping the same port -- a fault that would look like "peer
 	// to peer stopped working for no reason" and be very hard to trace.
 	if (_upnpMapped) {
-		_upnp.DeleteMapping(_punch.localPort);
+		// Punch.Close() releases its discovered endpoints when GGPO takes over.
+		// The UPnP reservation still belongs to our configured GGPO port.
+		_upnp.DeleteMapping(_ggpoPort);
 		_upnpMapped = false;
 	}
 	Disconnect();
@@ -940,7 +942,7 @@ bool SessionClient::EnableDirect(const SteamNetworkingIPAddr& matchmakerAddr,
 	// do that unprompted but will when asked over UPnP -- which most of them
 	// ship with switched on. Every player this rescues is one who would
 	// otherwise have spent the match on the relay.
-	if (!_upnpMapped && _upnp.Discover()) {
+	if (!_upnpMapped && _punch.localPort != 0 && _upnp.Discover()) {
 		_upnpMapped = _upnp.AddMapping(_punch.localPort, "sf4e netplay");
 	}
 
@@ -1005,6 +1007,9 @@ void SessionClient::PumpDirect() {
 
 bool SessionClient::TryDirectPath() {
 	_matchIsDirect = false;
+	// A lobby proof is insufficient once its socket has gone away. Only a
+	// proof made below can select direct play for this loaded battle.
+	_punchProven = false;
 
 	// Prove the path NOW, together, instead of trusting what the last punch
 	// said. After a rematch the last punch usually ran while the other PC was
@@ -1016,7 +1021,7 @@ bool SessionClient::TryDirectPath() {
 	// answering the other side for the full window. This also converges the
 	// case where only one side had proven, which used to aim GGPO at two
 	// different places.
-	if (_directEnabled && _directPeerPort != 0 && _punch.IsOpen()) {
+	if (_directEnabled && (_directPeerPort != 0 || _directPeerLocalPort != 0) && _punch.IsOpen()) {
 		std::string ip;
 		uint16_t port = 0;
 		if (_punch.Punch(_directPeerIp, _directPeerPort, _directPeerLocalIp, _directPeerLocalPort,
@@ -1026,18 +1031,13 @@ bool SessionClient::TryDirectPath() {
 			_punchProven = true;
 			spdlog::info("Peer to peer: path proven at match start");
 		}
-		else if (_punchProven) {
-			_punchProven = false;
-			spdlog::info("Peer to peer: the path proven earlier did not answer at match start; "
-				"using the relay so both PCs agree");
+		else {
+			spdlog::info("Peer to peer: no peer path proven at match start; using the relay");
 		}
 	}
 
-	// The path was proven in the lobby, the moment both players were paired,
-	// and kept alive since. Nothing to negotiate here -- just point GGPO at
-	// the address that answered. Punching at this point instead was the bug:
-	// each side opened its window when it personally reached match start, and
-	// windows a second apart never meet.
+	// Only the endpoint that answered the final match-start probe may become
+	// GGPO's peer. A stale lobby proof cannot survive a failed final probe.
 	if (_punchProven && _provenPort != 0) {
 		_directPeerIp = _provenIp;
 		_directPeerPort = _provenPort;
@@ -1056,7 +1056,7 @@ bool SessionClient::TryDirectPath() {
 	if (!_directEnabled) {
 		spdlog::info("Connection: server relay (peer to peer is off on this PC)");
 	}
-	else if (_directPeerPort == 0) {
+	else if (_directPeerPort == 0 && _directPeerLocalPort == 0) {
 		spdlog::info("Connection: server relay (the other player has peer to peer off)");
 	}
 	else {

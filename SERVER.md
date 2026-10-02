@@ -85,6 +85,8 @@ players to update too: a lobby only accepts the build it was created with.
    `Host-Rematch-Test.cmd`. It starts or reuses a matching server in the background,
    checks its response, then opens the game with instant rematches enabled.
    It connects your game to `127.0.0.1:23400` automatically.
+   When that local connection supplies only loopback addresses, the clients
+   use the relay. Loopback addresses are never offered as remote direct peers.
 3. On the other PC, launch `SF4Enhanced.exe --server HOST_IP:23400 --instant-rematch`,
    replacing `HOST_IP` with the host's Tailscale IPv4 address (shown by
    `tailscale ip -4`). A Windows shortcut can save these arguments; no

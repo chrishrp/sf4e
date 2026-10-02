@@ -102,6 +102,8 @@ namespace sf4e {
 
 				void BattleUpdate();
 				void CloseBattle();
+				static void StepNetplayStartup();
+				static bool NetplayStartupAborted();
 				// Opt-in loaded-battle rematches. Network actions run from the main
 				// application pump, never from a GGPO save/load/advance callback.
 				static void StepInstantRematch();

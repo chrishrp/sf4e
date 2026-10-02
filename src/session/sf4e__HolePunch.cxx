@@ -15,6 +15,7 @@
 #include <spdlog/spdlog.h>
 
 #include "sf4e__HolePunch.hxx"
+#include "sf4e__DirectEndpoint.hxx"
 
 using nlohmann::json;
 using sf4e::HolePunch;
@@ -52,7 +53,13 @@ bool HolePunch::Open(uint16_t localPort_) {
 		return false;
 	}
 
-	_boundPort = localPort_;
+	int localLength = sizeof(local);
+	if (getsockname(_sock, (sockaddr*)&local, &localLength) != 0) {
+		Close();
+		return false;
+	}
+	_boundPort = ntohs(local.sin_port);
+	ReadLocalAddresses();
 	u_long nonblocking = 1;
 	ioctlsocket(_sock, FIONBIO, &nonblocking);
 
@@ -76,6 +83,43 @@ void HolePunch::Close() {
 		closesocket(_sock);
 		_sock = INVALID_SOCKET;
 	}
+	_boundPort = 0;
+	_localAddresses.clear();
+	publicIp.clear();
+	publicPort = 0;
+	localIp.clear();
+	localPort = 0;
+}
+
+void HolePunch::ReadLocalAddresses() {
+	_localAddresses.clear();
+	DWORD bytes = 0;
+	WSAIoctl(_sock, SIO_ADDRESS_LIST_QUERY, nullptr, 0, nullptr, 0, &bytes, nullptr, nullptr);
+	if (bytes < sizeof(SOCKET_ADDRESS_LIST)) return;
+	std::vector<char> storage(bytes);
+	if (WSAIoctl(_sock, SIO_ADDRESS_LIST_QUERY, nullptr, 0, storage.data(), bytes,
+		&bytes, nullptr, nullptr) != 0) return;
+	const auto* addresses = reinterpret_cast<const SOCKET_ADDRESS_LIST*>(storage.data());
+	for (int i = 0; i < addresses->iAddressCount; ++i) {
+		const SOCKET_ADDRESS& address = addresses->Address[i];
+		if (address.iSockaddrLength >= sizeof(sockaddr_in) && address.lpSockaddr->sa_family == AF_INET) {
+			_localAddresses.push_back(reinterpret_cast<const sockaddr_in*>(address.lpSockaddr)->sin_addr.s_addr);
+		}
+	}
+}
+
+bool HolePunch::IsSelfEndpoint(const sockaddr_in& addr) const {
+	const uint16_t port = ntohs(addr.sin_port);
+	char ip[INET_ADDRSTRLEN] = {};
+	inet_ntop(AF_INET, &addr.sin_addr, ip, sizeof(ip));
+	if (!sf4e::DirectEndpoint::Usable(ip, port)) return true;
+	if (sf4e::DirectEndpoint::Same(ip, port, publicIp, publicPort)
+		|| sf4e::DirectEndpoint::Same(ip, port, localIp, localPort)) return true;
+	if (port != _boundPort) return false;
+	for (const uint32_t address : _localAddresses) {
+		if (addr.sin_addr.s_addr == address) return true;
+	}
+	return false;
 }
 
 HolePunch::~HolePunch() {
@@ -187,6 +231,22 @@ bool HolePunch::Discover(const sockaddr_in& matchmakerAddr, const sockaddr_in* r
 		}
 	}
 
+	// A server on this PC observes loopback for both candidates. Advertising
+	// that address would send the opponent's probes back to their own socket.
+	// With no reachable candidate, do not offer direct play on either side.
+	if (!sf4e::DirectEndpoint::Usable(publicIp, publicPort)) {
+		publicIp.clear();
+		publicPort = 0;
+	}
+	if (!sf4e::DirectEndpoint::Usable(localIp, localPort)) {
+		localIp.clear();
+		localPort = 0;
+	}
+	if (publicPort == 0 && localPort == 0) {
+		spdlog::info("Peer to peer: discovery returned only local-only addresses; using the server relay");
+		return false;
+	}
+
 	// The address itself is not logged: it is the player's own public IP.
 	spdlog::info("Peer to peer: our public mapping was discovered");
 	return true;
@@ -234,6 +294,8 @@ bool HolePunch::Punch(const std::string& peerIp, uint16_t peerPort,
 	const std::string& peerLocalIp, uint16_t peerLocalPort,
 	const std::string& token, int timeoutMs,
 	std::string& chosenIp, uint16_t& chosenPort, bool matchStart) {
+	chosenIp.clear();
+	chosenPort = 0;
 	if (_sock == INVALID_SOCKET) {
 		return false;
 	}
@@ -254,7 +316,7 @@ bool HolePunch::Punch(const std::string& peerIp, uint16_t peerPort,
 	const char* names[2] = { "local", "public" };
 	int numCandidates = 0;
 	for (int i = 0; i < 2; i++) {
-		if (ips[i].empty() || ports[i] == 0) {
+		if (!sf4e::DirectEndpoint::Usable(ips[i], ports[i])) {
 			continue;
 		}
 		Candidate& c = candidates[numCandidates];
@@ -263,6 +325,7 @@ bool HolePunch::Punch(const std::string& peerIp, uint16_t peerPort,
 		if (inet_pton(AF_INET, ips[i].c_str(), &c.addr.sin_addr) != 1) {
 			continue;
 		}
+		if (IsSelfEndpoint(c.addr)) continue;
 		c.valid = true;
 		c.what = names[i];
 		numCandidates++;
@@ -281,8 +344,8 @@ bool HolePunch::Punch(const std::string& peerIp, uint16_t peerPort,
 	// broken before it starts. That really happened -- one machine logged
 	// "path open" while the other logged "no reply" for the same match.
 	//
-	// Requiring an ACK to OUR OWN probe proves the round trip, so both sides
-	// agree or both fall back.
+	// Requiring an ACK to OUR OWN probe proves the round trip. Candidate and
+	// source checks also prevent an exchange with our own socket passing it.
 	// At match start the probe carries an extra mark. A keepalive from the
 	// results screen answers plain probes too, so a plain exchange proves
 	// reachability but not that the other PC has reached match start; only
@@ -329,6 +392,17 @@ bool HolePunch::Punch(const std::string& peerIp, uint16_t peerPort,
 			continue;
 		}
 
+		// Every packet must come from an offered host and must not be our own
+		// socket. Match the current datagram, never a previous valid ACK.
+		if (IsSelfEndpoint(from)) continue;
+		const char* incomingCandidate = nullptr;
+		for (int i = 0; i < numCandidates; ++i) {
+			if (from.sin_addr.s_addr == candidates[i].addr.sin_addr.s_addr) {
+				incomingCandidate = candidates[i].what;
+			}
+		}
+		if (incomingCandidate == nullptr) continue;
+
 		const bool isPlain = (size_t)n == plainProbe.size() && memcmp(buf, plainProbe.c_str(), plainProbe.size()) == 0;
 		const bool isMarked = (size_t)n == matchProbe.size() && memcmp(buf, matchProbe.c_str(), matchProbe.size()) == 0;
 		if (isPlain || isMarked) {
@@ -346,14 +420,7 @@ bool HolePunch::Punch(const std::string& peerIp, uint16_t peerPort,
 			// Their ack: our probes arrive and so do their replies. Only an
 			// address the peer offered may become the match endpoint; the
 			// port may differ from what the server observed, the host not.
-			for (int i = 0; i < numCandidates; i++) {
-				if (from.sin_addr.s_addr == candidates[i].addr.sin_addr.s_addr) {
-					which = candidates[i].what;
-				}
-			}
-			if (which == nullptr) {
-				continue;
-			}
+			which = incomingCandidate;
 			char fromIp[INET_ADDRSTRLEN] = { 0 };
 			inet_ntop(AF_INET, &from.sin_addr, fromIp, sizeof(fromIp));
 			chosenIp = fromIp;
@@ -394,6 +461,7 @@ void HolePunch::Keepalive(const std::string& peerIp, uint16_t peerPort, const st
 	if (inet_pton(AF_INET, peerIp.c_str(), &peer.sin_addr) != 1) {
 		return;
 	}
+	if (IsSelfEndpoint(peer)) return;
 	std::string probe = PUNCH_MAGIC + token;
 	sendto(_sock, probe.c_str(), (int)probe.size(), 0, (const sockaddr*)&peer, sizeof(peer));
 
@@ -408,7 +476,8 @@ void HolePunch::Keepalive(const std::string& peerIp, uint16_t peerPort, const st
 		if (n <= 0) {
 			break;
 		}
-		if ((size_t)n == probe.size() && memcmp(buf, probe.c_str(), probe.size()) == 0) {
+		if (from.sin_addr.s_addr == peer.sin_addr.s_addr && !IsSelfEndpoint(from)
+			&& (size_t)n == probe.size() && memcmp(buf, probe.c_str(), probe.size()) == 0) {
 			sendto(_sock, ack.c_str(), (int)ack.size(), 0, (const sockaddr*)&from, sizeof(from));
 		}
 	}

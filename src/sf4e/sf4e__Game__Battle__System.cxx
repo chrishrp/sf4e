@@ -39,6 +39,7 @@
 #include "sf4e__Game.hxx"
 #include "sf4e__GameEvents.hxx"
 #include "sf4e__Lobby.hxx"
+#include "sf4e__NetplayStartup.hxx"
 #include "sf4e__Game__Battle.hxx"
 #include "sf4e__Game__Battle__Hud.hxx"
 #include "sf4e__Game__Battle__System.hxx"
@@ -552,15 +553,20 @@ static bool AdvanceSpectatorFrame(rSystem* _this) {
     return true;
 }
 
-// Soak watchdog state: when the current match was asked to start, and whether
-// it ever reached GGPO_EVENTCODE_RUNNING. A rematch can stall with one side in
-// the match and the other still sitting in the lobby (seen after a draw), which
-// leaves a black screen and ends an unattended run. See the watchdog in
-// BattleUpdate.
-static DWORD g_ggpoStartTick = 0;
-static bool g_ggpoReachedRunning = false;
+// Pumped even while the engine is waiting for battle initialization and is
+// not calling BattleUpdate. A missing peer must not leave a black screen.
+static sf4e::NetplayStartupWatchdog g_ggpoStartup;
+static bool g_netplayStartupAborted = false;
 static DWORD g_connInterruptedTick = 0;
 static void AbortMatchStart(const char* why);   // defined with StartGGPO below
+
+bool fSystem::NetplayStartupAborted() { return g_netplayStartupAborted; }
+
+void fSystem::StepNetplayStartup() {
+    // Called only after ggpo_idle returns, never inside a GGPO callback.
+    if (ggpo && g_ggpoStartup.Expired(GetTickCount64()))
+        AbortMatchStart("GGPO did not connect to the other player within 30 seconds");
+}
 
 bool fSystem::InstantRematchResultVisible() {
     return g_instant.preparing || (ggpo && HoldInstantResult());
@@ -688,6 +694,10 @@ void fSystem::StepInstantRematch() {
         if (event.action == SessionProtocol::IR_ABORT) {
             if (event.nextMatchId != 0) sf4e::Lobby::OnInstantRematchStarted();
             spdlog::warn("Instant rematch: cancelled ({})", event.reason);
+            if (ggpo && !g_ggpoStartup.Running()) {
+                AbortMatchStart("server cancelled the match before GGPO connected");
+                return;
+            }
             if (event.nextMatchId == 0 && !g_instant.preparing && !g_instant.starting
                 && !HoldInstantResult()) {
                 // A viewer may leave while the players are still fighting.
@@ -764,7 +774,7 @@ void fSystem::StepInstantRematch() {
             spdlog::info("Instant rematch: restored baseline, starting GGPO epoch {}", event.nextMatchId);
         }
     }
-    if (g_instant.starting && g_ggpoReachedRunning) g_instant.starting = false;
+    if (g_instant.starting && g_ggpoStartup.Running()) g_instant.starting = false;
     if ((g_instant.starting || g_instant.preparing)
         && GetTickCount64() - g_instant.startSince > 20000) {
         spdlog::warn("Instant rematch: restart timed out");
@@ -848,24 +858,6 @@ void fSystem::BattleUpdate() {
     rPadSystem::__publicMethods& padMethods = rPadSystem::publicMethods;
     static int nLastRandomInputFrame = -1;
     static fPadSystem::Inputs randomInputs[2] = { { 0, 0 }, { 0, 0 } };
-
-    // Soak watchdog. A rematch can stall with this side in the match while the
-    // peer is still in the lobby (reproduced after a draw): GGPO never reaches
-    // RUNNING, the screen stays black and an unattended run dies there. Bail
-    // back to the lobby so the auto-ready starts a fresh match instead. Checked
-    // before the bUpdateAllowed bail-out, because a stalled match is exactly
-    // the case where the update is not allowed to proceed.
-    // Soak runs only, again. Arming this for real matches turned a black
-    // screen into a CRASH: AbortMatchStart only sets RS_ISLEAVING, it does not
-    // close the GGPO session, so GGPO kept calling back into a battle system
-    // that was tearing down and the game dereferenced null half a second
-    // later. Recovering from a stalled start needs the session closed first,
-    // which is a bigger change than this watchdog.
-    if (sf4e::bSoakTest && ggpo != nullptr && !g_ggpoReachedRunning &&
-        g_ggpoStartTick != 0 && (GetTickCount() - g_ggpoStartTick) > 30000) {
-        g_ggpoStartTick = 0;
-        AbortMatchStart("soak watchdog: GGPO never reached RUNNING (peer never joined)");
-    }
 
     if (!bUpdateAllowed) {
         return;
@@ -1244,6 +1236,8 @@ void fSystem::BattleUpdate() {
 
 void fSystem::CloseBattle() {
     rSystem* _this = (rSystem*)this;
+    g_ggpoStartup.Reset();
+    g_netplayStartupAborted = false;
     ReleaseInstantBaseline();
     g_instant = InstantRematchState();
     if (ggpo) {
@@ -1540,17 +1534,22 @@ void fSystem::RecordAllToInternalMementos(rSystem* system, GameMementoKey::Memen
 static void AbortMatchStart(const char* why) {
     spdlog::error("Match start aborted: {}", why);
 
-    // Drop the session BEFORE asking the game to leave. It is half-built by
-    // definition here -- we are aborting precisely because it never reached
-    // RUNNING -- and every rollback path keys off "ggpo != nullptr", so
-    // leaving it live means the teardown can still be called back into a
-    // session that never had two players. Clearing it first makes all of
-    // those paths no-ops on the way out.
-    if (fSystem::ggpo) {
-        ggpo_close_session(fSystem::ggpo);
-        fSystem::ggpo = nullptr;
-    }
+    // The loading barrier must let the engine finish initializing and then
+    // leave, even if the server never sends BattleSynced for this attempt.
+    g_netplayStartupAborted = true;
+    g_ggpoStartup.Reset();
+    // This closes GGPO before releasing the retained snapshot or permitting
+    // battle teardown, and notifies the rematch coordinator when applicable.
+    fSystem::ExitInstantRematch();
     fSystem::nFramesToSkip = 0;
+    fSystem::nExtraFramesToSimulate = 0;
+    fSystem::nNextBattleStartFlowTarget = -1;
+    fSystem::localPlayerHandle = GGPO_INVALID_HANDLE;
+    fPadSystem::playbackFrame = -1;
+    fSystem::ResetPacing("startup aborted");
+    fVsBattle::bOverrideNextRandomSeed = false;
+    fVsBattle::nextMatchRandomSeed = 0xffffffff;
+    fVsBattle::bTerminateOnNextLeftBattle = true;
     for (int i = 0; i < NUM_SAVE_STATES; i++) {
         if (fSystem::saveStates[i].used) {
             fSystem::SaveState::Free(&fSystem::saveStates[i]);
@@ -1591,6 +1590,8 @@ static void __cdecl OnGgpoAssertFailed(const char* msg) {
 }
 
 void fSystem::StartGGPO(GGPOPlayer* inPlayers, int numPlayers, int port, int frameDelay, DWORD rngSeed) {
+    g_netplayStartupAborted = false;
+    g_ggpoStartup.Reset();
     InitializeInstantRematch();
     ResetPacing(nullptr);
     {
@@ -1627,11 +1628,8 @@ void fSystem::StartGGPO(GGPOPlayer* inPlayers, int numPlayers, int port, int fra
     // the lobby data can be momentarily incomplete when the match fires, and a
     // half-built player list makes ggpo_add_player fail ("could not add
     // player"). Refuse to start rather than freeze on that box.
-    if (numPlayers < 2
-        || inPlayers[0].player_num != 1 || inPlayers[1].player_num != 2
-        || (inPlayers[0].type != GGPO_PLAYERTYPE_LOCAL && inPlayers[0].type != GGPO_PLAYERTYPE_REMOTE)
-        || (inPlayers[1].type != GGPO_PLAYERTYPE_LOCAL && inPlayers[1].type != GGPO_PLAYERTYPE_REMOTE)) {
-        AbortMatchStart("player list not ready (both players not yet in the lobby)");
+    if (!sf4e::ValidNetplayPlayerSlots(inPlayers, numPlayers)) {
+        AbortMatchStart("invalid player slots (expected one local side and one remote side)");
         return;
     }
 
@@ -1643,8 +1641,7 @@ void fSystem::StartGGPO(GGPOPlayer* inPlayers, int numPlayers, int port, int fra
     // tests, so a real player whose opponent vanished between the lobby and the
     // first frame sat on a black screen forever with nothing in the log --
     // which is exactly what the comment on the watchdog already described.
-    g_ggpoStartTick = GetTickCount();
-    g_ggpoReachedRunning = false;
+    g_ggpoStartup.Arm(GetTickCount64());
 
     GGPOSessionCallbacks cb = { 0 };
     cb.begin_game = ggpo_begin_game_callback;
@@ -1674,6 +1671,7 @@ void fSystem::StartGGPO(GGPOPlayer* inPlayers, int numPlayers, int port, int fra
     ggpo_set_disconnect_notify_start(ggpo, 2000);
 
     int localPlayerIdx = -1;
+    localPlayerHandle = GGPO_INVALID_HANDLE;
     for (int i = 0; i < 2; i++) {
         players[i].type = inPlayers[i].type;
         // Fresh window each match: these are static and would otherwise carry
@@ -1712,9 +1710,9 @@ void fSystem::StartGGPO(GGPOPlayer* inPlayers, int numPlayers, int port, int fra
 }
 
 void fSystem::StartSpectating(unsigned short localport, int num_players, char* host_ip, unsigned short host_port, DWORD rngSeed) {
+    g_netplayStartupAborted = false;
     InitializeInstantRematch();
-    g_ggpoStartTick = GetTickCount();
-    g_ggpoReachedRunning = false;
+    g_ggpoStartup.Arm(GetTickCount64());
     ResetPacing(nullptr);
     pacer.enabled = false;
     for (int i = 0; i < NUM_SAVE_STATES; i++) {
@@ -1985,7 +1983,7 @@ bool fSystem::ggpo_on_event_callback(GGPOEvent* info) {
         spdlog::info("GGPO: Synchronized with peer");
         break;
     case GGPO_EVENTCODE_RUNNING:
-        g_ggpoReachedRunning = true;   // soak watchdog: the match really started
+        g_ggpoStartup.MarkRunning();
         bUpdateAllowed = true;
         spdlog::info("GGPO: Running");
         break;

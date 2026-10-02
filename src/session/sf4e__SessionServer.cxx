@@ -38,6 +38,7 @@
 #endif
 
 #include "sf4e__SessionProtocol.hxx"
+#include "sf4e__DirectEndpoint.hxx"
 #include "sf4e__SessionServer.hxx"
 
 using nlohmann::json;
@@ -229,7 +230,8 @@ void SessionServer::MaybeExchangeDirectEndpoints() {
 	if (_directExchanged || PlayerCount() < 2) {
 		return;
 	}
-	if (clients.at(0).directPort == 0 || clients.at(1).directPort == 0) {
+	if ((clients.at(0).directPort == 0 && clients.at(0).directLocalPort == 0)
+		|| (clients.at(1).directPort == 0 && clients.at(1).directLocalPort == 0)) {
 		return;
 	}
 
@@ -570,10 +572,15 @@ int SessionServer::Step()
 				// rematch silently fell back to the relay. An offer only
 				// arrives when a client has re-armed, so this is not chatty.
 				_directExchanged = false;
-				clients.at(side).directIp = offer.ip;
-				clients.at(side).directPort = offer.port;
-				clients.at(side).directLocalIp = offer.localIp;
-				clients.at(side).directLocalPort = offer.localPort;
+				const bool publicUsable = sf4e::DirectEndpoint::Usable(offer.ip, offer.port);
+				const bool localUsable = sf4e::DirectEndpoint::Usable(offer.localIp, offer.localPort);
+				clients.at(side).directIp = publicUsable ? offer.ip : "";
+				clients.at(side).directPort = publicUsable ? offer.port : 0;
+				clients.at(side).directLocalIp = localUsable ? offer.localIp : "";
+				clients.at(side).directLocalPort = localUsable ? offer.localPort : 0;
+				if (!publicUsable && !localUsable) {
+					spdlog::info("direct offer contained no usable peer endpoint; keeping both players on the relay");
+				}
 				MaybeExchangeDirectEndpoints();
 			}
 			else if (type == SessionProtocol::MT_PREBATTLE_SETENV) {

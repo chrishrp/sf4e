@@ -5,6 +5,10 @@ param()
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+# Load the real hashing command before installing process cmdlet mocks; module
+# auto-loading must not depend on mocked process discovery under CTest.
+Import-Module Microsoft.PowerShell.Utility -ErrorAction Stop
+
 $helperPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'Host-Rematch-Test.ps1'
 $tokens = $null
 $parseErrors = $null
