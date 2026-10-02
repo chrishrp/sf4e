@@ -199,6 +199,13 @@ if(BUILD_TESTING)
         add_executable(PortraitArchiveTest tests/portrait_archive_test.cxx)
         target_link_libraries(PortraitArchiveTest PRIVATE PortraitArchive)
         add_test(NAME PortraitArchive COMMAND PortraitArchiveTest)
+        find_program(SF4E_POWERSHELL NAMES powershell)
+        if(SF4E_POWERSHELL)
+            add_test(NAME HostLauncher COMMAND "${SF4E_POWERSHELL}"
+                -NoLogo -NoProfile -ExecutionPolicy Bypass
+                -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/host_launcher_test.ps1")
+            set_tests_properties(HostLauncher PROPERTIES TIMEOUT 30)
+        endif()
     endif()
 endif()
 if(WIN32)

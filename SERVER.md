@@ -82,7 +82,7 @@ players to update too: a lobby only accepts the build it was created with.
    their own account, [share your host machine](https://tailscale.com/docs/features/sharing)
    with them. No router port forwarding is needed for this route.
 2. Extract the same preview package on both PCs. On the host, double-click
-   `Host-Rematch-Test.cmd`. It starts this package's server in the background,
+   `Host-Rematch-Test.cmd`. It starts or reuses a matching server in the background,
    checks its response, then opens the game with instant rematches enabled.
    It connects your game to `127.0.0.1:23400` automatically.
 3. On the other PC, launch `SF4Enhanced.exe --server HOST_IP:23400 --instant-rematch`,
@@ -105,6 +105,13 @@ started by that folder's launcher. Logs are in `test-server-logs` next to the
 launcher. The host script can also be run with `-ServerOnly` to start the
 server without opening USF4. A successful local status check does not prove
 the other PC can connect; verify that from the other PC before playing.
+
+When a server from another extracted package already owns UDP port 23400, the
+host helper can reuse it after checking its executable hash and version. It
+leaves that server and its firewall rule in place and opens the game from the
+folder you launched. Use the original server folder's stop helper to stop it;
+the new folder never takes ownership of that existing process. A different or
+unverifiable executable is rejected without stopping anything.
 
 ### Standalone server
 

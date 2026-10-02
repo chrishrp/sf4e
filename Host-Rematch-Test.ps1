@@ -88,6 +88,54 @@ function Assert-MatchmakerPortFree {
     finally { $probe.Dispose() }
 }
 
+function Get-CompatibleRunningServer {
+    # A newer extracted client may share the unchanged server in an older
+    # package. Keep that process in place, including its existing firewall rule.
+    $endpoints = @(Get-NetUDPEndpoint -LocalPort $serverPort -ErrorAction SilentlyContinue)
+    if ($endpoints.Count -eq 0) { return $null }
+    $owners = @($endpoints | Select-Object -ExpandProperty OwningProcess -Unique)
+    if ($owners.Count -ne 1 -or [int]$owners[0] -le 0) {
+        throw "UDP port $serverPort has an ambiguous owner. No process was stopped."
+    }
+
+    $candidate = Get-Process -Id ([int]$owners[0]) -ErrorAction SilentlyContinue
+    if ($null -eq $candidate) { return $null }
+    $verified = $false
+    try {
+        # Pin the exact process before checking its on-disk executable. Matching
+        # just the name or advertised version is insufficient for safe reuse.
+        $pinnedHandle = $candidate.Handle
+        if ($null -eq $pinnedHandle -or $pinnedHandle -eq [IntPtr]::Zero) {
+            throw 'The running process handle is unavailable.'
+        }
+        if ($candidate.HasExited) { return $null }
+        $candidatePath = $candidate.Path
+        if ([string]::IsNullOrWhiteSpace($candidatePath)) {
+            throw 'The running executable path is unavailable.'
+        }
+        $bundledHash = (Get-FileHash -LiteralPath $serverPath -Algorithm SHA256).Hash
+        $runningHash = (Get-FileHash -LiteralPath $candidatePath -Algorithm SHA256).Hash
+        if ($bundledHash -ne $runningHash) {
+            throw 'The running executable does not match this package''s LobbyServer.exe.'
+        }
+
+        $currentOwners = @(Get-NetUDPEndpoint -LocalPort $serverPort -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty OwningProcess -Unique)
+        if ($candidate.HasExited -or $currentOwners.Count -ne 1 -or
+            [int]$currentOwners[0] -ne $candidate.Id) {
+            throw 'The UDP port owner changed while it was being checked.'
+        }
+        $verified = $true
+        return $candidate
+    }
+    catch {
+        throw "Cannot reuse the server on UDP port $serverPort. $($_.Exception.Message) No process was stopped."
+    }
+    finally {
+        if (-not $verified) { $candidate.Dispose() }
+    }
+}
+
 function Wait-ForServer([Diagnostics.Process]$ServerProcess) {
     $timer = [Diagnostics.Stopwatch]::StartNew()
     while ($timer.Elapsed.TotalSeconds -lt 15) {
@@ -155,7 +203,16 @@ try {
         }
 
         $createdServer = $false
+        $borrowedServer = $false
+        $borrowedPackage = $null
         try {
+            if ($null -eq $serverProcess) {
+                $serverProcess = Get-CompatibleRunningServer
+                if ($null -ne $serverProcess) {
+                    $borrowedServer = $true
+                    $borrowedPackage = Split-Path -Parent $serverProcess.Path
+                }
+            }
             if ($null -eq $serverProcess) {
                 Assert-MatchmakerPortFree
                 $null = New-Item -ItemType Directory -Path $logDirectory -Force
@@ -182,6 +239,7 @@ try {
 
             Wait-ForServer $serverProcess
             if ($createdServer) { Write-Host "Started test server $expectedVersion (PID $($serverProcess.Id))." }
+            elseif ($borrowedServer) { Write-Host "Reusing matching test server $expectedVersion from '$borrowedPackage' (PID $($serverProcess.Id))." }
             else { Write-Host "Reusing this package's test server $expectedVersion (PID $($serverProcess.Id))." }
         }
         catch {
@@ -198,7 +256,10 @@ try {
         }
 
         Write-Host 'Local server: 127.0.0.1:23400. Keep this PC awake while friends play.'
-        Write-Host 'Use Stop-Rematch-Test.cmd when finished; logs are in test-server-logs.'
+        if ($borrowedServer) {
+            Write-Host "The server and its logs remain in '$borrowedPackage'. Use that package's Stop-Rematch-Test.cmd when finished."
+        }
+        else { Write-Host 'Use Stop-Rematch-Test.cmd when finished; logs are in test-server-logs.' }
         if (-not $ServerOnly) {
             $null = Start-Process -FilePath $launcherPath -WorkingDirectory $packageDirectory `
                 -ArgumentList '--server', '127.0.0.1:23400', '--instant-rematch'
