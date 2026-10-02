@@ -13,11 +13,18 @@ the real USF4 state restoration still needs live validation. Keep the released
 3. Put the server machine's address in `server.txt` on both PCs. On a LAN, use
    its LAN IPv4 address on both, for example `192.168.1.50:23400` (replace the
    example). An older public server does not support this experiment.
-4. With Steam running, launch **`Try-Instant-Rematch.cmd` on both PCs**. It sets
-   `SF4E_INSTANT_REMATCH=1` only for that launch. Launching `SF4Enhanced.exe`
-   normally keeps the experiment off.
+4. With Steam running, launch **`SF4Enhanced.exe` on both PCs** from a preview
+   built with `SF4E_DEFAULT_INSTANT_REMATCH=ON`. The experiment is enabled for
+   that launch when the server supports it. `Try-Instant-Rematch.cmd` also
+   enables it for older preview packages. To use ordinary lobby rematches,
+   launch `SF4Enhanced.exe --no-instant-rematch`.
 5. Open Multiplayer Battle, create a private room, and join its code on the
    other PC. Pick characters, Ultras and a stage, then ready both players.
+
+A package with built-in public servers needs no `server.txt` for ordinary
+play. That does not upgrade those servers: the instant-rematch test and shared
+room scores still require the matching fork server. On an older server the
+client uses ordinary rematches automatically, even with the experiment enabled.
 
 ## First test
 

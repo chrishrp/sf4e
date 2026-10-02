@@ -5,9 +5,12 @@ connect out to it, so no player forwards a port. It hands out codes, runs the
 pre-match lobby, checks that both players run the same build, and relays the
 match traffic when the two players cannot reach each other directly.
 
-Use this fork's server to enable the shared room records. No hosted server
-address is included in the development package. You can run a server for
-your own group on a machine reachable by all players and spectators.
+Use this fork's server to enable shared room records and experimental instant
+rematches. A client package can retain the original launcher's public servers
+for ordinary play without a configuration file. Those services do not gain new
+features just because the client is updated: their operator must deploy the
+matching server, or you can run one on another machine reachable by all players.
+Renting a new server is not required when an existing compatible one is available.
 
 ## Before you start
 

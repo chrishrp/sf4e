@@ -227,10 +227,12 @@ if(WIN32)
 # deploy/pack-all.cmd reads deploy/server.private (gitignored) and passes it
 # here. Empty means no default; server.txt or --server then has to supply it.
 set(SF4E_BAKED_SERVER "" CACHE STRING "Lobby server (host[:port]) baked into the launcher")
+option(SF4E_DEFAULT_INSTANT_REMATCH "Enable experimental instant rematches when double-clicking the preview launcher" OFF)
 set(SF4E_BAKED_OUT "${CMAKE_BINARY_DIR}/generated/baked_server.h")
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/bake-server.cmake")
 
 add_executable(Launcher WIN32 src/launcher/launcher.cxx src/launcher/app.rc)
+target_compile_definitions(Launcher PRIVATE SF4E_DEFAULT_INSTANT_REMATCH=$<BOOL:${SF4E_DEFAULT_INSTANT_REMATCH}>)
 set_target_properties(Launcher PROPERTIES OUTPUT_NAME "SF4Enhanced")
 target_include_directories(Launcher PRIVATE ${VALVEFILEVDF_INCLUDE_DIRS} "${CMAKE_BINARY_DIR}/generated")
 target_link_libraries(Launcher PRIVATE ${LIB_DETOURS} CLI11::CLI11 spdlog::spdlog "shlwapi" "pathcch")
@@ -273,7 +275,6 @@ install(
   FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/INSTALL.md"
     "${CMAKE_CURRENT_SOURCE_DIR}/SERVER.md"
-    "${CMAKE_CURRENT_SOURCE_DIR}/server.txt"
     "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE"
     "${CMAKE_CURRENT_SOURCE_DIR}/Try-Instant-Rematch.cmd"
     "${CMAKE_CURRENT_SOURCE_DIR}/INSTANT-REMATCH-TEST.md"

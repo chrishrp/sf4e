@@ -10,7 +10,9 @@ This is a design and validation record. Source inspection establishes the GGPO
 requirements below; it does not establish that restoring a USF4 battle after a
 complete match is safe on every character or that live multiplayer has passed.
 
-This build is opt-in and keeps the previous direct or relay endpoints through
+The experiment is off in default source builds; preview packages can enable it
+on double-click with `SF4E_DEFAULT_INSTANT_REMATCH=ON`. It still requires the
+server's instant-rematch capability. It keeps the previous direct or relay endpoints through
 the short prepare/start gap. The result overlay does not try to bind a second
 hole-punch socket while GGPO owns the port. Starting a fresh session still
 performs GGPO's peer handshake.
@@ -29,9 +31,12 @@ spectators, and a lobby server built from the same fork version. Both PCs must
 connect to that server. See [server setup](../SERVER.md) and
 [installation](../INSTALL.md) for the normal connection setup.
 
-1. Launch `Try-Instant-Rematch.cmd` from the extracted preview package on both
-   PCs. It sets `SF4E_INSTANT_REMATCH=1` for the launched game; starting
-   `SF4Enhanced.exe` normally leaves the experiment off.
+1. Launch `SF4Enhanced.exe` from a preview built with
+   `SF4E_DEFAULT_INSTANT_REMATCH=ON` on both PCs. Other builds can use
+   `Try-Instant-Rematch.cmd` or `SF4Enhanced.exe --instant-rematch` to opt in.
+   Use `--no-instant-rematch` to disable it for one launch. These explicit
+   options override `SF4E_INSTANT_REMATCH`; otherwise an inherited value is
+   preserved, including `0` to disable the preview default.
 2. Join the same room, choose a character on each side and a stage, and start
    the match. The first match loads normally. Keep the same players, seats,
    characters, costumes, colors, ultras, edition, and stage for this test.
@@ -45,7 +50,7 @@ connect to that server. See [server setup](../SERVER.md) and
 5. Keep the logs from **both PCs** in `%APPDATA%\sf4e\logs\`. Note which match
    and action failed, whether the screens agreed, and whether it fell back to
    the lobby. Relevant lines begin with `Instant rematch:`. If a restart fails,
-   keep both logs before repeating with the normal launcher.
+   keep both logs before repeating with `--no-instant-rematch`.
 
 This first test checks the loaded-battle path across two real machines. Longer
 matches, different characters, time-over/draw results, and spectators are the
